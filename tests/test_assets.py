@@ -11,6 +11,19 @@ from backend.assets import AssetStore, Image, _parse_model, _records, _texture_u
 
 
 class AssetParserTests(unittest.TestCase):
+    def test_detail_model_cab_is_renderable_in_fresh_and_cached_catalogs(self):
+        path = "/def/vehicle/truck/volvo.fh_2024/cabin/l2h3_8x4_aero.sii"
+        model = "/vehicle/truck/volvo_fh_2024/cabin/globe_xl_aero_2024.pmd"
+        fresh = AssetStore._catalog_entry(path, "cab.volvo.fh_2024.cabin", "cabin", Path(path), {"detail_model": [model], "variant": ["default"], "look": ["default"]})
+        cached = AssetStore._enrich_catalog_entry({**fresh, "baseModel": None, "model": None})
+        self.assertEqual(fresh["baseModel"], model)
+        self.assertEqual(fresh["model"], model)
+        self.assertEqual(cached["baseModel"], model)
+        self.assertEqual(cached["model"], model)
+        cached["fields"]["model"] = "/preferred.pmd"
+        cached["baseModel"] = None
+        self.assertEqual(AssetStore._enrich_catalog_entry(cached)["baseModel"], "/preferred.pmd")
+
     def test_paint_job_imports_included_settings_and_all_accessory_overrides_once(self):
         with tempfile.TemporaryDirectory() as temp:
             store = AssetStore(cache_path=Path(temp))

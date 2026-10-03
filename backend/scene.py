@@ -10,6 +10,7 @@ from assets import _numbers
 
 
 IDENTITY = {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}
+MOUNT_CATEGORIES = {"swheel": "steering_w", "doorsteps": "doorstep"}
 
 
 def paint_material(color: list, fields: dict, paint_texture: str | None = None) -> dict:
@@ -175,8 +176,7 @@ def build_scene(truck: dict, assets, cancelled=None, model_cache=None) -> dict:
                 if category == "interior":
                     targets = [m for m in mounts if m["name"] == "ext_interior"]
                 else:
-                    mount_name = "swheel" if category == "steering_w" else category
-                    targets = [m for m in mounts if m["name"] == mount_name]
+                    targets = [m for m in mounts if MOUNT_CATEGORIES.get(m["name"], m["name"]) == category]
                     if not targets:
                         targets = [m for m in mounts if m["name"].startswith(category + "_")]
                 # Donor mounts on the cab/frame win over mounts introduced by other accessories.
@@ -194,7 +194,7 @@ def build_scene(truck: dict, assets, cancelled=None, model_cache=None) -> dict:
         issues.append(f'{accessory["category"]}: no matching attachment locator. This instance remains in the save but is omitted from the preview.')
     for mount in mounts:
         name = mount["name"]
-        mount_category = "steering_w" if name == "swheel" else name
+        mount_category = MOUNT_CATEGORIES.get(name, name)
         exact = installed.get(mount_category, [])
         if not exact:
             exact = next((items for category, items in installed.items() if name.startswith(category + "_")), [])

@@ -45,7 +45,7 @@ These are real captures of the app using locally installed game assets. The prev
 You need **Windows 10/11, 64-bit**, an installed copy of **Euro Truck Simulator 2**, and a browser with WebGL support. S Garage uses your installed game, DLC, and available mods. Game assets and saves are not included in the download.
 
 1. Open the **[Downloads page](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/releases)**. A GitHub account is not required.
-2. Under **Assets**, download **`S-Garage-v0.2.0-Windows-x64.zip`**. Choose this file instead of GitHub's automatically generated “Source code” downloads.
+2. Under **Assets**, download **`S-Garage-v0.2.1-Windows-x64.zip`**. Choose this file instead of GitHub's automatically generated “Source code” downloads.
 3. Right-click the ZIP and select **Extract All**. Keep the extracted files together.
 4. Open the extracted **S Garage** folder and double-click **`S Garage.exe`**.
 5. Your browser opens the garage. Keep the small S Garage window open while editing; use **Stop garage** when finished.

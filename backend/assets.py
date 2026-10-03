@@ -312,7 +312,7 @@ class AssetStore:
             category = path_parts[accessory_index + 1]
         info = fields.get("info[]", [])
         name = _display_name(values.get("name") or (info[-1] if info else ""), unit)
-        model_values = values.get("model") or values.get("model[]")
+        model_values = values.get("model") or values.get("model[]") or values.get("detail_model")
         exterior_model = values.get("ext_model") or values.get("ext_model[]")
         return {
             "path": path,
@@ -363,7 +363,7 @@ class AssetStore:
         entry["extModel"] = entry.get("extModel") or fields.get("ext_model") or fields.get("ext_model[]")
         entry["extLook"] = entry.get("extLook") or fields.get("ext_look")
         entry["extVariant"] = entry.get("extVariant") or fields.get("ext_variant")
-        entry["baseModel"] = entry.get("baseModel") or fields.get("model") or fields.get("model[]") or (entry.get("model") if not (entry.get("exteriorModel") or entry.get("extModel") or entry.get("interiorModel")) else None)
+        entry["baseModel"] = entry.get("baseModel") or fields.get("model") or fields.get("model[]") or fields.get("detail_model") or (entry.get("model") if not (entry.get("exteriorModel") or entry.get("extModel") or entry.get("interiorModel")) else None)
         entry["model"] = entry.get("exteriorModel") or entry.get("extModel") or entry.get("baseModel") or entry.get("interiorModel")
         if entry.get("unitId"):
             entry["unitName"] = entry["unitId"]
@@ -442,7 +442,7 @@ class AssetStore:
             model_options = (
                 (entry.get("exteriorModel"), entry.get("exteriorLook"), entry.get("exteriorVariant")),
                 (entry.get("extModel"), entry.get("extLook"), entry.get("extVariant")),
-                (entry.get("baseModel") or fields.get("model") or fields.get("model[]"), entry.get("look"), entry.get("variant")),
+                (entry.get("baseModel") or fields.get("model") or fields.get("model[]") or fields.get("detail_model"), entry.get("look"), entry.get("variant")),
                 (entry.get("interiorModel"), entry.get("interiorLook"), entry.get("interiorVariant")),
             )
             selected = next(((path, model_look, model_variant) for path, model_look, model_variant in model_options if path), None)

@@ -41,6 +41,18 @@ class FakeAssets:
 
 
 class SceneTests(unittest.TestCase):
+    def test_plural_doorstep_mount_renders_and_selects_the_singular_category(self):
+        assets = FakeAssets()
+        assets.entries.append({"path": "/step", "unitId": "step", "category": "doorstep", "model": "step"})
+        assets.model = lambda path: {"pieces": [], "locators": [{"name": "doorsteps", **IDENTITY, "position": [1, 2, 3]}] if path == "/chassis" else []}
+        truck = {"id": "truck", "accessories": [{"id": path, "dataPath": path, "category": category, "type": "vehicle_accessory", "fields": {}, "slots": []} for path, category in (("/chassis", "chassis"), ("/step", "doorstep"))]}
+        scene = build_scene(truck, assets)
+        self.assertEqual(scene["issues"], [])
+        self.assertEqual(next(part for part in scene["parts"] if part["category"] == "doorstep")["position"], [1, 2, 3])
+        point = next(point for point in scene["points"] if point["name"] == "doorsteps")
+        self.assertEqual(point["category"], "doorstep")
+        self.assertEqual(point["accessoryId"], "/step")
+
     def test_paint_job_uses_atlas_on_front_panels_and_override_on_sunshield(self):
         assets = FakeAssets()
         assets.entries.extend([{"path": "/paint", "unitId": "paint", "category": "paint_job"}, {"path": "/shield", "unitId": "painted.test.sunshld", "category": "sunshld", "model": "shield"}])

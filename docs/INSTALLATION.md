@@ -13,7 +13,7 @@ The portable download includes the runtime, interface, and conversion tools. You
 
 ## Download
 
-Open **[S Garage downloads](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/releases)**. Open the newest release and expand **Assets** if the files are collapsed. Download **`S-Garage-v0.2.0-Windows-x64.zip`**. For newer releases, choose the file ending in **`Windows-x64.zip`**.
+Open **[S Garage downloads](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/releases)**. Open the newest release and expand **Assets** if the files are collapsed. Download **`S-Garage-v0.2.1-Windows-x64.zip`**. For newer releases, choose the file ending in **`Windows-x64.zip`**.
 
 “Source code (zip)” and “Source code (tar.gz)” contain developer files, rather than the ready-to-run app. The separate ConverterPIX and SII Decrypt source archives are provided for license compliance; you do not need them to run S Garage.
 
