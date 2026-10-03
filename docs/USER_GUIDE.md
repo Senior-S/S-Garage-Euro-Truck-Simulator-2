@@ -29,9 +29,19 @@ Hover over a catalog preview to rotate it. Equivalent definitions are hidden ini
 
 Mixed-brand parts can lack a compatible locator or behave differently in game. Always inspect the final result in ETS2.
 
+## Paint your truck
+
+Click **Paint** above the 3D view, or select the installed paint job. The catalog shows paint jobs from your installed game, DLC, and mods for the current truck and cab. Its color swatches show each design's default palette.
+
+Choose a paint job to apply it to the truck preview. In **Paint colors** on the left, change the base, design, metallic-flake, or flip colors supported by that paint job, then click **Apply colors**. Colors marked **Locked** cannot be edited for that design. Each application is one undoable change; your save is written only when you click **Save changes**.
+
+The preview approximates the game's paint shaders, including metallic finishes. Inspect the result in ETS2 after saving.
+
 ## Undo and advanced controls
 
 Use the bottom **Undo / Redo** buttons or **Ctrl+Z / Ctrl+Y**. Text inputs keep normal editing shortcuts. Undoing an added hookup clears its marker and returns it to Add mode.
+
+Click **History** to see changes across all trucks in the loaded save. Click an applied change to undo it and all later changes at once, or **Opened save** to undo everything. Dimmed changes can be restored with their **Redo** action. Making a new edit after undoing discards the redo branch.
 
 History lasts for the running server session. Stopping the app clears history and unsaved edits. Browser tabs share one session; reload a stale tab before editing.
 

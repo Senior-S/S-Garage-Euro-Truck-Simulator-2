@@ -58,12 +58,17 @@ class SceneTests(unittest.TestCase):
             {"id": "shield", "type": "vehicle_addon_accessory", "dataPath": "/shield", "category": "sunshld", "fields": {"paint_color": "(0,0,0)"}, "slots": []},
             {"id": "paint", "type": "vehicle_paint_job_accessory", "dataPath": "/paint", "category": "paint_job", "fields": {"base_color": "(&3f800000,1,1)", "mask_b_color": "(0,.5,1)"}, "slots": []},
         ]}
-        scene = build_scene(truck, assets)
-        materials = {part["category"]: part["model"]["pieces"][0]["material"] for part in scene["parts"]}
+        cache = {}
+        scene = build_scene(truck, assets, model_cache=cache)
+        materials = {part["category"]: part["paint"] for part in scene["parts"]}
         self.assertEqual(materials["cabin"]["paintTexture"], "/atlas")
         self.assertEqual(materials["sunshld"]["paintTexture"], "/white")
         self.assertEqual(materials["sunshld"]["color"], [1, 1, 1])
         self.assertEqual(materials["cabin"]["paintColors"][2], [0, .5, 1])
+        truck["accessories"][-1]["fields"]["base_color"] = "(0,1,0)"
+        repainted = build_scene(truck, assets, model_cache=cache)
+        self.assertIs(repainted["parts"][0]["model"], scene["parts"][0]["model"])
+        self.assertEqual(repainted["parts"][0]["paint"]["color"], [0, 1, 0])
 
     def test_marker_edit_reuses_base_models_and_imports_only_new_hookup(self):
         assets = FakeAssets()

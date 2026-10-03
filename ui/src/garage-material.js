@@ -3,16 +3,21 @@ import * as THREE from 'three'
 // Shared by the garage and catalog so game shader inputs have one interpretation.
 export function configureGarageMaterial(material, source, textures, lightMode = { value: 0 }) {
   const paint = textures.get(source.paintTexture), lamps = textures.get(source.lightMask), alpha = textures.get(source.lightAlpha)
-  if (!paint && !lamps) return
+  if (!paint && !lamps && !source.flipColor) return
   if (paint) paint.colorSpace = source.airbrush ? THREE.SRGBColorSpace : THREE.NoColorSpace
   for (const texture of [lamps, alpha]) if (texture) { texture.colorSpace = THREE.NoColorSpace; texture.wrapS = texture.wrapT = THREE.RepeatWrapping }
   material.userData.shaderTextures = [paint, lamps, alpha].filter(Boolean)
-  material.customProgramCacheKey = () => JSON.stringify([Boolean(paint), Boolean(lamps), source.airbrush, source.paintUv])
+  material.customProgramCacheKey = () => JSON.stringify([Boolean(paint), Boolean(lamps), Boolean(source.flipColor), source.airbrush, source.paintUv])
   material.onBeforeCompile = shader => {
     shader.uniforms.garageLights = lightMode
     shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nattribute vec2 garageUv; varying vec2 vGarageUv;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGarageUv = garageUv;')
     let declarations = 'varying vec2 vGarageUv; uniform float garageLights;\n'
+    if (source.flipColor) {
+      Object.assign(shader.uniforms, { garageFlip: { value: new THREE.Color(...source.flipColor) }, garageFlake: { value: new THREE.Color(...source.flakeColor) }, garageFlipStrength: { value: source.flipStrength } })
+      declarations += 'uniform vec3 garageFlip, garageFlake; uniform float garageFlipStrength;\n'
+      shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\nfloat garageAngle = pow(1.0 - abs(dot(normal, normalize(vViewPosition))), 3.0); diffuseColor.rgb = mix(diffuseColor.rgb, garageFlip, clamp(garageAngle * garageFlipStrength, 0.0, .8)); diffuseColor.rgb = mix(diffuseColor.rgb, garageFlake, .06);')
+    }
     if (paint) {
       Object.assign(shader.uniforms, { garagePaint: { value: paint }, garageBase: { value: new THREE.Color(...source.color) }, garageRed: { value: new THREE.Color(...source.paintColors[0]) }, garageGreen: { value: new THREE.Color(...source.paintColors[1]) }, garageBlue: { value: new THREE.Color(...source.paintColors[2]) } })
       declarations += 'uniform sampler2D garagePaint; uniform vec3 garageBase, garageRed, garageGreen, garageBlue;\n'

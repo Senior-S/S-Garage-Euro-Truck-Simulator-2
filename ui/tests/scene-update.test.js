@@ -7,6 +7,19 @@ const model = { pieces: [{ positions: [0, 0, 0, 1, 0, 0, 0, 1, 0], indices: [0, 
 const part = (id, modelKey, position = [0, 0, 0]) => ({ id, category: 'accessory', modelKey, position, model })
 const point = position => ({ accessoryId: 'cab', kind: 'hookup', name: 'slot_0', position })
 
+test('paint changes replace materials while retaining truck geometry and markers', () => {
+  const group = new THREE.Group(), markers = new THREE.Group()
+  const painted = { ...part('cab', 'cab'), model: { pieces: [{ ...model.pieces[0], material: { paintable: true } }] }, paint: { color: [1, 0, 0] } }
+  updateTruckGroup(group, markers, { parts: [painted], points: [point([0, 0, 0])] })
+  const mesh = [...group.userData.instances.values()][0].children[0], geometry = mesh.geometry, material = mesh.material, marker = markers.children[0]
+  updateTruckGroup(group, markers, { parts: [{ ...painted, paint: { color: [0, 1, 0] } }], points: [point([0, 0, 0])] })
+  assert.equal(mesh.geometry, geometry)
+  assert.notEqual(mesh.material, material)
+  assert.deepEqual(mesh.material.color.toArray(), [0, 1, 0])
+  assert.equal(markers.children[0], marker)
+  disposeObject(group); disposeObject(markers)
+})
+
 test('paint textures are shared between instances and released only after the last user is removed', () => {
   const original = THREE.TextureLoader.prototype.load, loaded = [], disposed = []
   THREE.TextureLoader.prototype.load = path => {

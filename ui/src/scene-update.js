@@ -18,6 +18,25 @@ export function disposeObject(object) {
   object.removeFromParent()
 }
 
+function buildMaterial(source, textureCache, onFailure, lightMode) {
+  const color = source.color || [.48, .52, .49], transparent = source.transparent || (source.opacity ?? 1) < 1
+  const material = new THREE.MeshStandardMaterial({ color: new THREE.Color(...color), metalness: source.metalness ?? .54, roughness: source.roughness ?? .5, transparent, depthWrite: source.depthWrite ?? !transparent, alphaTest: source.alphaTest ?? 0, opacity: source.opacity ?? 1, side: THREE.DoubleSide })
+  const textures = new Map()
+  material.userData.textureRecords = []
+  for (const path of new Set([source.texture, source.paintTexture, source.lightMask, source.lightAlpha].filter(Boolean))) {
+    let record = textureCache.get(path)
+    if (!record) {
+      const texture = new THREE.TextureLoader().load(path, undefined, undefined, () => onFailure?.(`Unable to load truck texture: ${path}`))
+      texture.flipY = false; texture.wrapS = texture.wrapT = THREE.RepeatWrapping; texture.colorSpace = THREE.SRGBColorSpace
+      record = { texture, users: 0 }; textureCache.set(path, record)
+    }
+    record.users++; material.userData.textureRecords.push([textureCache, path]); textures.set(path, record.texture)
+  }
+  material.map = textures.get(source.texture) || null
+  configureGarageMaterial(material, source, textures, lightMode)
+  return material
+}
+
 export function updateTruckGroup(group, pointsGroup, data, onFailure, lightMode) {
   const instances = group.userData.instances ||= new Map(), counts = new Map(), retained = new Set()
   const textureCache = group.userData.textureCache ||= new Map()
@@ -29,7 +48,7 @@ export function updateTruckGroup(group, pointsGroup, data, onFailure, lightMode)
     let instance = instances.get(key)
     if (instance && instance.userData.modelKey !== part.modelKey) { disposeObject(instance); instances.delete(key); instance = null }
     if (!instance) {
-      instance = new THREE.Group(); instance.userData.modelKey = part.modelKey
+      instance = new THREE.Group(); instance.userData.modelKey = part.modelKey; instance.userData.paintKey = JSON.stringify(part.paint)
       for (const piece of part.model.pieces || []) {
         const geometry = new THREE.BufferGeometry()
         geometry.setAttribute('position', new THREE.Float32BufferAttribute(piece.positions || [], 3))
@@ -39,21 +58,8 @@ export function updateTruckGroup(group, pointsGroup, data, onFailure, lightMode)
         if (shaderUvs?.length) geometry.setAttribute('garageUv', new THREE.Float32BufferAttribute(shaderUvs, 2))
         if (piece.indices?.length) geometry.setIndex(piece.indices)
         if (!piece.normals?.length) geometry.computeVertexNormals()
-        const source = piece.material || {}, color = source.color || [.48, .52, .49], transparent = source.transparent || (source.opacity ?? 1) < 1
-        const material = new THREE.MeshStandardMaterial({ color: new THREE.Color(...color), metalness: source.metalness ?? .54, roughness: source.roughness ?? .5, transparent, depthWrite: source.depthWrite ?? !transparent, alphaTest: source.alphaTest ?? 0, opacity: source.opacity ?? 1, side: THREE.DoubleSide })
-        const textures = new Map()
-        material.userData.textureRecords = []
-        for (const path of new Set([source.texture, source.paintTexture, source.lightMask, source.lightAlpha].filter(Boolean))) {
-          let record = textureCache.get(path)
-          if (!record) {
-            const texture = new THREE.TextureLoader().load(path, undefined, undefined, () => onFailure?.(`Unable to load truck texture: ${path}`))
-            texture.flipY = false; texture.wrapS = texture.wrapT = THREE.RepeatWrapping; texture.colorSpace = THREE.SRGBColorSpace
-            record = { texture, users: 0 }; textureCache.set(path, record)
-          }
-          record.users++; material.userData.textureRecords.push([textureCache, path]); textures.set(path, record.texture)
-        }
-        material.map = textures.get(source.texture) || null
-        configureGarageMaterial(material, source, textures, lightMode)
+        const source = { ...piece.material, ...(piece.material?.paintable ? part.paint : null) }
+        const material = buildMaterial(source, textureCache, onFailure, lightMode)
         const mesh = new THREE.Mesh(geometry, material); mesh.userData.accessoryId = part.id; mesh.userData.category = part.category; instance.add(mesh)
       }
       for (const locator of part.model.locators || []) {
@@ -72,6 +78,21 @@ export function updateTruckGroup(group, pointsGroup, data, onFailure, lightMode)
         instance.add(flare)
       }
       instances.set(key, instance); group.add(instance)
+    }
+    const paintKey = JSON.stringify(part.paint)
+    if (instance.userData.paintKey !== paintKey) {
+      part.model.pieces.forEach((piece, index) => {
+        if (!piece.material?.paintable) return
+        const mesh = instance.children[index], old = mesh.material
+        mesh.material = buildMaterial({ ...piece.material, ...part.paint }, textureCache, onFailure, lightMode)
+        // Acquire replacement textures before releasing the old references.
+        for (const [cache, path] of old.userData.textureRecords) {
+          const record = cache.get(path)
+          if (--record.users === 0) { record.texture.dispose(); cache.delete(path) }
+        }
+        old.dispose()
+      })
+      instance.userData.paintKey = paintKey
     }
     instance.position.fromArray(part.position || [0, 0, 0]); instance.quaternion.fromArray(part.rotation || [0, 0, 0, 1]); instance.scale.fromArray(part.scale || [1, 1, 1])
   }

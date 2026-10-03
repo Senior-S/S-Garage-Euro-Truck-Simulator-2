@@ -13,6 +13,7 @@ import '@fontsource/ibm-plex-mono/latin-500.css'
 import '@fontsource/ibm-plex-mono/latin-600.css'
 import { AlertTriangle, ArrowLeftRight, Check, ChevronDown, ChevronRight, CircleHelp, Clock3, Cloud, Cpu, Disc3, Eye, Filter, History, Layers3, Move3D, PanelLeftClose, Plus, RotateCcw, Save, Search, Settings2, SlidersHorizontal, Truck, Undo2, Redo2, X } from 'lucide-react'
 import GarageScene from './scene.jsx'
+import { paintHex, paintRgb } from './paint-color.js'
 import { AnimatedPartPreview, cachedThumbnail, cacheModel, cachedModel, clearModelCache, queuePreview, renderModelThumbnail } from './catalog-preview.jsx'
 import './style.css'
 
@@ -40,7 +41,7 @@ function App() {
   const [category, setCategory] = React.useState('all'), [query, setQuery] = React.useState(''), [brand, setBrand] = React.useState('all'), [selected, setSelected] = React.useState(''), [chosenSlot, setChosenSlot] = React.useState('')
   const [mountPoint, setMountPoint] = React.useState(null), [selectedMarker, setSelectedMarker] = React.useState(null)
   const [settings, setSettings] = React.useState(false), [gamePath, setGamePath] = React.useState(''), [profilesPath, setProfilesPath] = React.useState(''), [decryptorPath, setDecryptorPath] = React.useState(''), [toolPath, setToolPath] = React.useState('')
-  const [catalogOpen, setCatalogOpen] = React.useState(true)
+  const [catalogOpen, setCatalogOpen] = React.useState(true), [historyOpen, setHistoryOpen] = React.useState(false), [paints, setPaints] = React.useState([]), [paintsLoading, setPaintsLoading] = React.useState(false)
   const [lightMode, setLightMode] = React.useState('off'), [markerVisibility, setMarkerVisibility] = React.useState('all')
   const [showDuplicates, setShowDuplicates] = React.useState(() => localStorage.getItem('yard.showDuplicates') === 'true')
   const [catalogLimit, setCatalogLimit] = React.useState(180)
@@ -54,7 +55,8 @@ function App() {
   const profiles = [...new Map(saves.map(save => [profileId(save), { id: profileId(save), name: save.profile || 'Profile' }])).values()]
   const profileSaves = saves.filter(save => profileId(save) === selectedProfile).sort((a, b) => new Date(b.modified || b.created || 0) - new Date(a.modified || a.created || 0))
   const activeSave = saves.find(save => save.id === state?.saveId)
-  const partLabel = part => catalog.find(item => item.path === part.dataPath)?.name || friendlyCategory(part.category || part.type)
+  const paintPart = state?.truck?.accessories?.find(part => part.category === 'paint_job')
+  const partLabel = part => paints.find(item => item.path === part.dataPath)?.name || catalog.find(item => item.path === part.dataPath)?.name || friendlyCategory(part.category || part.type)
 
   const applyState = React.useCallback(data => {
     setState(data)
@@ -173,14 +175,14 @@ function App() {
   }
   const edit = body => { sceneCancel.current?.(); return run('Applying change', () => send('/api/edit', { ...revisionGuard(), truckId: state?.truck?.id, ...body })) }
   const save = () => run('Writing save', async () => { const result = await send('/api/save', revisionGuard()); applyState(result.state); setNotice(`Saved. Backup: ${result.backupPath}`); return result.state })
-  const history = direction => { sceneCancel.current?.(); return run(direction === 'undo' ? 'Undoing' : 'Redoing', () => send(`/api/${direction}`, revisionGuard())) }
+  const history = (direction, steps = 1) => { sceneCancel.current?.(); return run(direction === 'undo' ? 'Undoing' : 'Redoing', () => send(`/api/${direction}`, { ...revisionGuard(), steps })) }
   React.useEffect(() => {
     const onKey = e => {
       const target = e.target
       if (target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); if (state?.canUndo) history('undo') }
       if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) { e.preventDefault(); if (state?.canRedo) history('redo') }
-      if (e.key === 'Escape') { setSettings(false); setError('') }
+      if (e.key === 'Escape') { setSettings(false); setHistoryOpen(false); setError('') }
     }
     window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey)
   }, [state?.canUndo, state?.canRedo])
@@ -190,10 +192,23 @@ function App() {
     window.addEventListener('beforeunload', before); return () => window.removeEventListener('beforeunload', before)
   }, [state?.dirty])
 
-  const matching = React.useMemo(() => catalog.filter(item => {
+  React.useEffect(() => {
+    if (category !== 'paint_job' || !state?.truck?.brand) return
+    const controller = new AbortController()
+    setPaints([])
+    setPaintsLoading(true)
+    api(`/api/paints?brand=${encodeURIComponent(state.truck.brand)}`, { signal: controller.signal }).then(setPaints).catch(error => { if (error.name !== 'AbortError') reportError(error.message) }).finally(() => { if (!controller.signal.aborted) setPaintsLoading(false) })
+    return () => controller.abort()
+  }, [category, state?.truck?.brand, assetVersion])
+  const matching = React.useMemo(() => (category === 'paint_job' ? paints : catalog).filter(item => {
+    if (item.suitableFor?.length) {
+      const cabin = state?.truck?.accessories.find(part => part.category === 'cabin')
+      const unit = catalog.find(entry => entry.path === cabin?.dataPath)?.unitId
+      if (unit && !item.suitableFor.includes(unit)) return false
+    }
     const isHookup = item.category?.toLowerCase() === 'hookup'
     return (chosenSlot || category === 'hookup' ? isHookup : !isHookup) && (chosenSlot || (category === 'all' || item.category === category) && (brand === 'all' || item.brand === brand)) && `${item.name} ${item.category} ${advanced ? `${item.brand} ${item.path} ${item.unitId}` : brandLabel(item.brand)}`.toLowerCase().includes(query.toLowerCase())
-  }), [catalog, chosenSlot, category, brand, query, advanced])
+  }), [catalog, paints, chosenSlot, category, brand, query, advanced, state?.truck?.accessories])
   const filtered = React.useMemo(() => {
     if (showDuplicates) return matching
     const unique = new Map()
@@ -209,6 +224,7 @@ function App() {
   const shownIssues = [...new Set([...(state?.issues || []), ...sceneIssues])]
   const applyDefinition = item => {
     if (!state?.truck) return
+    if (item.category === 'paint_job' && paintPart) { setSelected(paintPart.id); edit({ op: 'paint', accessoryId: paintPart.id, dataPath: item.path }); return }
     if (chosenSlot && (mode === 'add' || mode === 'replace') && activePart) { edit({ op: 'hookup', accessoryId: activePart.id, slotName: chosenSlot, hookup: item.unitId }); return }
     if (mode === 'replace' && activePart) edit({ op: 'replace', accessoryId: activePart.id, dataPath: item.path })
     else if (mode === 'add') edit({ op: 'add', dataPath: item.path })
@@ -241,7 +257,7 @@ function App() {
       <button className="save-button" onClick={save} disabled={!state?.dirty || !!busy}><Save size={15}/><span>{busy === 'Writing save' ? 'Saving…' : 'Save changes'}</span>{state?.dirty && <i/>}</button>
     </header>
 
-    <main className="workspace">
+    <main className={`workspace ${catalogOpen ? '' : 'catalog-is-closed'}`}>
       <aside className="installed-panel">
         <div className="panel-heading"><div><div className="eyebrow">Garage</div><h1>Installed parts</h1></div><span className="count-pill">{state?.truck?.accessories?.length ?? '—'}</span></div>
         {state?.trucks?.length > 0 && <label className="truck-switch"><Truck size={15}/><select aria-label="Select truck" value={state.truck?.id || ''} onChange={e => selectTruck(e.target.value)}>{state.trucks.map(t => <option value={t.id} key={t.id}>{t.name} · {t.plate}</option>)}</select><ChevronDown size={14}/></label>}
@@ -252,6 +268,7 @@ function App() {
         </button>)}</div>
         {activePart && <section className="part-detail"><div className="detail-overline"><span>{advanced ? 'Selected component' : 'Selected part'}</span><button title="Remove component" aria-label="Remove component" onClick={() => edit({ op: 'remove', accessoryId: activePart.id })}><X size={15}/></button></div><h2>{partLabel(activePart)}</h2>{advanced && <p className="path-text">{activePart.dataPath}</p>}
           <div className="detail-metrics"><div><span>Category</span><b>{friendlyCategory(activePart.category || activePart.type)}</b></div><div><span>Instances</span><b>{state?.truck?.accessoryCount ?? state?.truck?.accessories?.length}</b></div></div>
+          {activePart.category === 'paint_job' && <PaintControls part={activePart} busy={!!busy} edit={edit} onFailure={reportError}/>}
           {activePart.slots?.length > 0 && <div className="slot-block"><div className="slot-heading"><span>Attachment points</span><span>{activePart.slots.length}</span></div>{activePart.slots.map((slot, index) => { const hookup = catalog.find(item => item.unitId === slot.hookup); return <div className="slot-entry" key={`${slot.name}:${index}`}><button className={`slot-row ${chosenSlot === slot.name ? 'slot-chosen' : ''}`} onClick={() => { setSelectedMarker({ accessoryId: activePart.id, name: slot.name, kind: 'hookup' }); setChosenSlot(slot.name); setMountPoint(null); setMode('add'); if (category !== 'hookup') { setCategory('hookup'); setBrand('all'); setQuery('') } }}><span className="slot-lamp"/><span>{friendlySlot(slot.name)}</span><code>{advanced ? slot.hookup || 'Empty' : hookup?.name || (slot.hookup ? 'Installed' : 'Empty')}</code></button><button className="slot-remove" aria-label={`Remove attachment from ${friendlySlot(slot.name)}`} title="Remove this attachment. Undo is available." onClick={() => edit({ op: 'hookup', accessoryId: activePart.id, slotName: slot.name, index, hookup: '' })}><X size={13}/></button></div>})}</div>}
           {advanced && Object.keys(activePart.fields || {}).length > 0 && <details className="field-editor"><summary><SlidersHorizontal size={13}/> Raw instance fields <ChevronDown size={13}/></summary><div className="fields-scroll">{Object.entries(activePart.fields).filter(([key]) => !/^(id|accessory|parent|_)/i.test(key)).map(([key, value]) => <label key={key}><span>{pretty(key)}</span><input defaultValue={value} onBlur={e => e.target.value !== value && edit({ op: 'fields', accessoryId: activePart.id, fields: { [key]: e.target.value } })}/></label>)}</div></details>}
           <div className="component-actions"><button title="Duplicate installed part" onClick={() => edit({ op: 'duplicate', accessoryId: activePart.id })}><CopyIcon/> DUPLICATE</button><button title="Replace from catalog" onClick={() => { setMode('replace'); setCatalogOpen(true) }}><ArrowLeftRight size={14}/> REPLACE</button></div>
@@ -261,7 +278,7 @@ function App() {
       </aside>
 
       <section className="viewport-panel">
-        <div className="viewport-header"><div><span className="eyebrow">Truck model</span><h2>{state?.truck?.name || 'Truck inspection'}</h2>{advanced && state?.truck?.brand && <span className="truck-make">{state.truck.brand}</span>}</div><div className="preview-controls"><label>Lights<select aria-label="Preview lights" value={lightMode} onChange={event => setLightMode(event.target.value)}><option value="off">Off</option><option value="low">Low</option><option value="high">High</option></select></label><label>Markers<select aria-label="Marker visibility" value={markerVisibility} onChange={event => setMarkerVisibility(event.target.value)}><option value="all">All</option><option value="selected">Selected only</option><option value="hidden">Hidden</option></select></label></div></div>
+        <div className="viewport-header"><div><span className="eyebrow">Truck model</span><h2>{state?.truck?.name || 'Truck inspection'}</h2>{advanced && state?.truck?.brand && <span className="truck-make">{state.truck.brand}</span>}</div><div className="preview-controls">{paintPart && <button className="paint-open" onClick={() => { setSelected(paintPart.id); setSelectedMarker(null); setChosenSlot(''); setMountPoint(null); setCategory('paint_job'); setBrand(state.truck.brand); setQuery(''); setCatalogOpen(true) }}>Paint</button>}<label>Lights<select aria-label="Preview lights" value={lightMode} onChange={event => setLightMode(event.target.value)}><option value="off">Off</option><option value="low">Low</option><option value="high">High</option></select></label><label>Markers<select aria-label="Marker visibility" value={markerVisibility} onChange={event => setMarkerVisibility(event.target.value)}><option value="all">All</option><option value="selected">Selected only</option><option value="hidden">Hidden</option></select></label></div></div>
         <div className="scene-wrap">{state?.truck ? <GarageScene lightMode={lightMode} markerVisibility={markerVisibility} key={`${state.sessionId}:${state.truck.id}`} truckKey={`${state.sessionId}:${state.truck.id}`} sceneRevision={state.revision} sessionId={state.sessionId} truckId={state.truck.id} cancelRef={sceneCancel} selectedAccessoryId={activePart?.id} selectedMarker={selectedMarker} markerLabel={point => point.kind === 'hookup' ? `${friendlyCategory(state.truck.accessories.find(part => part.id === point.accessoryId)?.category)} / ${friendlySlot(point.name)}` : friendlyCategory(point.category || point.name)} onPick={point => {
           setSelectedMarker(point.kind ? point : null)
           const part = state.truck.accessories.find(item => item.id === point.accessoryId)
@@ -278,21 +295,58 @@ function App() {
       </section>
 
       <aside className={`catalog-panel ${catalogOpen ? '' : 'catalog-collapsed'}`}>
-        <div className="catalog-heading"><div><div className="eyebrow">PARTS DEPARTMENT / 03</div><h2>Catalog</h2></div><button className="icon-button" onClick={() => setCatalogOpen(!catalogOpen)} aria-label="Collapse catalog"><PanelLeftClose size={16}/></button></div>
-        {catalogOpen && <><div className="catalog-mode"><button className={mode === 'replace' ? 'active' : ''} onClick={() => { setMode('replace'); if (!chosenSlot) { setSelectedMarker(null); setChosenSlot(''); setMountPoint(null) } }}><ArrowLeftRight size={14}/> Replace</button><button className={mode === 'add' ? 'active' : ''} onClick={() => setMode('add')}><Plus size={15}/> Add</button><button className={mode === 'duplicate' ? 'active' : ''} onClick={() => { setSelectedMarker(null); setMode('duplicate'); setChosenSlot(''); setMountPoint(null) }}><CopyIcon/> Copy</button></div>
+        <div className="catalog-heading"><div><div className="eyebrow">PARTS DEPARTMENT / 03</div><h2>Catalog</h2></div><button className="icon-button" onClick={() => setCatalogOpen(!catalogOpen)} aria-label={catalogOpen ? 'Collapse catalog' : 'Expand catalog'} aria-expanded={catalogOpen}><PanelLeftClose size={16} style={{ transform: catalogOpen ? 'scaleX(-1)' : 'none' }}/></button></div>
+        {catalogOpen && <>{category !== 'paint_job' && <div className="catalog-mode"><button className={mode === 'replace' ? 'active' : ''} onClick={() => { setMode('replace'); if (!chosenSlot) { setSelectedMarker(null); setChosenSlot(''); setMountPoint(null) } }}><ArrowLeftRight size={14}/> Replace</button><button className={mode === 'add' ? 'active' : ''} onClick={() => setMode('add')}><Plus size={15}/> Add</button><button className={mode === 'duplicate' ? 'active' : ''} onClick={() => { setSelectedMarker(null); setMode('duplicate'); setChosenSlot(''); setMountPoint(null) }}><CopyIcon/> Copy</button></div>}
           <label className="search-box"><Search size={16}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search parts, brands…"/><kbd>/</kbd></label>
-          <div className="filter-row"><label><Filter size={13}/><select aria-label="Filter category" value={category} onChange={e => setCategory(e.target.value)}><option value="all">All categories</option>{categories.map(c => <option key={c} value={c}>{friendlyCategory(c)}</option>)}</select><ChevronDown size={12}/></label><label><select aria-label="Filter brand" value={brand} onChange={e => setBrand(e.target.value)}><option value="all">All makes</option>{brands.map(b => <option key={b} value={b}>{brandLabel(b)}</option>)}</select><ChevronDown size={12}/></label></div>
+          <div className="filter-row"><label><Filter size={13}/><select aria-label="Filter category" value={category} onChange={e => setCategory(e.target.value)}><option value="all">All categories</option>{categories.map(c => <option key={c} value={c}>{friendlyCategory(c)}</option>)}</select><ChevronDown size={12}/></label><label><select aria-label="Filter brand" disabled={category === 'paint_job'} value={category === 'paint_job' ? state?.truck?.brand || brand : brand} onChange={e => setBrand(e.target.value)}><option value="all">All makes</option>{brands.map(b => <option key={b} value={b}>{brandLabel(b)}</option>)}</select><ChevronDown size={12}/></label></div>
           {(chosenSlot || mountPoint) && <div className="target-chip"><span className="slot-lamp"/> Target: {friendlySlot(chosenSlot || mountPoint?.name || 'Mount point')}<button aria-label="Clear selected attachment point" onClick={() => { setSelectedMarker(null); setChosenSlot(''); setMountPoint(null) }}><X size={12}/></button></div>}
           <div className="catalog-result-line"><span>{filtered.length.toLocaleString()} parts</span><label className="duplicates-toggle"><input type="checkbox" checked={showDuplicates} onChange={e => setShowDuplicates(e.target.checked)}/> Show duplicates</label></div>
-          <div className="catalog-grid" key={JSON.stringify([assetVersion, category, query, brand, Boolean(chosenSlot), showDuplicates])}>{filtered.slice(0, catalogLimit).map((item, index) => <CatalogCard key={item.path} item={item} index={index} advanced={advanced} onChoose={() => applyDefinition(item)} onFailure={reportError} loadModel={loadModel} loadThumbnail={loadThumbnail} />)}{filtered.length === 0 && <div className="no-results"><Search size={21}/><span>{chosenSlot ? 'No hookup definitions match this search.' : 'No parts match this filter.'}</span></div>}{filtered.length > catalogLimit && <button className="load-more" onClick={() => setCatalogLimit(limit => limit + 180)}>Show next {Math.min(180, filtered.length - catalogLimit)} parts <ChevronDown size={13}/></button>}</div>
+          <div className="catalog-grid" key={JSON.stringify([assetVersion, category, query, brand, Boolean(chosenSlot), showDuplicates])}>{filtered.slice(0, catalogLimit).map((item, index) => <CatalogCard key={item.path} item={item} index={index} advanced={advanced} onChoose={() => applyDefinition(item)} onFailure={reportError} loadModel={loadModel} loadThumbnail={loadThumbnail} />)}{filtered.length === 0 && <div className="no-results"><Search size={21}/><span>{chosenSlot ? 'No hookup definitions match this search.' : category === 'paint_job' && paintsLoading ? 'Loading paint jobs...' : 'No parts match this filter.'}</span></div>}{filtered.length > catalogLimit && <button className="load-more" onClick={() => setCatalogLimit(limit => limit + 180)}>Show next {Math.min(180, filtered.length - catalogLimit)} parts <ChevronDown size={13}/></button>}</div>
           <div className="catalog-foot"><span><span className={`small-status-dot ${catalogLoading ? 'loading-dot' : ''}`}/>{catalogLoading ? 'IMPORTING GAME ASSETS' : 'CATALOG FROM GAME DATA'}</span><span>{filtered.length > catalogLimit ? `Showing ${catalogLimit} of ` : ''}{filtered.length}</span></div>
         </>}
       </aside>
     </main>
 
-    <footer className="statusbar"><div className="history-actions"><button disabled={!state?.canUndo || !!busy} onClick={() => history('undo')} title="Undo (Ctrl+Z)"><Undo2 size={15}/> Undo</button><button disabled={!state?.canRedo || !!busy} onClick={() => history('redo')} title="Redo (Ctrl+Y)"><Redo2 size={15}/> Redo</button><span className="history-separator"/><span className="revision"><History size={13}/> {advanced ? `Revision ${state?.revision ?? '—'}` : 'History'}</span></div><div className="status-save"><span className={`dirty-marker ${state?.dirty ? 'is-dirty' : ''}`}/><span>{state?.dirty ? 'Unsaved changes' : state ? 'All changes saved' : 'No session'}</span>{activeSave && <><span className="history-separator"/><Clock3 size={13}/><span>{dateLabel(activeSave.modified || activeSave.created)}</span>{advanced && activeSave.format && <span>{activeSave.format}</span>}</>}</div><div className="status-right"><span><Cloud size={14}/> Local only</span><span className="history-separator"/><button onClick={() => setSettings(true)}><CircleHelp size={14}/> Help & paths</button></div></footer>
+    <footer className="statusbar"><div className="history-actions"><button disabled={!state?.canUndo || !!busy} onClick={() => history('undo')} title="Undo (Ctrl+Z)"><Undo2 size={15}/> Undo</button><button disabled={!state?.canRedo || !!busy} onClick={() => history('redo')} title="Redo (Ctrl+Y)"><Redo2 size={15}/> Redo</button><span className="history-separator"/><button disabled={!state} onClick={() => setHistoryOpen(true)}><History size={13}/> History{advanced && ` ? ${state?.revision ?? 0}`}</button></div><div className="status-save"><span className={`dirty-marker ${state?.dirty ? 'is-dirty' : ''}`}/><span>{state?.dirty ? 'Unsaved changes' : state ? 'All changes saved' : 'No session'}</span>{activeSave && <><span className="history-separator"/><Clock3 size={13}/><span>{dateLabel(activeSave.modified || activeSave.created)}</span>{advanced && activeSave.format && <span>{activeSave.format}</span>}</>}</div><div className="status-right"><span><Cloud size={14}/> Local only</span><span className="history-separator"/><button onClick={() => setSettings(true)}><CircleHelp size={14}/> Help & paths</button></div></footer>
     {(error || notice) && <div role="status" className={`toast ${error ? 'toast-error' : ''}`}><span>{error || notice}</span><button onClick={() => { setError(''); setNotice('') }} aria-label="Dismiss message"><X size={15}/></button></div>}
+    {historyOpen && <HistoryWindow state={state} busy={!!busy} history={history} onClose={() => setHistoryOpen(false)}/>}
     {settings && <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && setSettings(false)}><section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><div className="modal-top"><div><div className="eyebrow">LOCAL CONNECTION</div><h2 id="settings-title">Game folders</h2></div><button className="icon-button" onClick={() => setSettings(false)} aria-label="Close settings"><X size={17}/></button></div><p className="modal-copy">Point S Garage at your Euro Truck Simulator 2 install and profile directory. Your save stays on this PC.</p><label className="path-field"><span>GAME INSTALL DIRECTORY</span><input value={gamePath} onChange={e => setGamePath(e.target.value)} placeholder="C:\\Program Files (x86)\\Steam\\steamapps\\common\\Euro Truck Simulator 2"/></label><label className="path-field"><span>PROFILES DIRECTORY</span><input value={profilesPath} onChange={e => setProfilesPath(e.target.value)} placeholder="Documents\\Euro Truck Simulator 2\\profiles"/></label><label className="path-field"><span>CONVERTERPIX TOOL</span><input value={toolPath} onChange={e => setToolPath(e.target.value)} placeholder="Path to converter_pix.exe"/></label><label className="path-field"><span>DECRYPTOR TOOL (OPTIONAL)</span><input value={decryptorPath} onChange={e => setDecryptorPath(e.target.value)} placeholder="Path to a compatible save decryptor executable"/></label><div className="detected-path"><span className={`small-status-dot ${status?.ready ? '' : 'off'}`}/><span>{status?.message || status?.toolPath || status?.decryptorPath || 'Waiting for folder scan'}</span></div><div className="modal-actions"><button className="text-button" onClick={() => setSettings(false)}>CANCEL</button><button className="save-button" onClick={saveConfig} disabled={!!busy}><Check size={15}/> SCAN FOLDERS</button></div></section></div>}
+  </div>
+}
+
+function HistoryWindow({ state, busy, history, onClose }) {
+  const dialog = React.useRef(null)
+  React.useEffect(() => { dialog.current.showModal() }, [])
+  const entries = state?.history || [], position = state?.historyPosition || 0
+  return <dialog ref={dialog} className="history-window" onCancel={onClose} aria-labelledby="history-title">
+    <div className="modal-top"><h2 id="history-title">Edit history</h2><button className="icon-button" aria-label="Close history" onClick={onClose}><X size={18}/></button></div>
+    <p>Changes across all trucks in this save, for the current session. Choose a change to undo it and every change after it.</p>
+    <div className="history-list"><button disabled={!position || busy} onClick={() => history('undo', position)}><span>Opened save</span><small>Undo all {position} changes</small></button>
+      {entries.map((entry, index) => <button key={`${entry.time}:${index}`} className={index >= position ? 'history-undone' : ''} disabled={busy} onClick={() => history(index < position ? 'undo' : 'redo', index < position ? position - index : index - position + 1)}>
+        <span>{index + 1}. {entry.label}</span><small>{state.trucks.find(truck => truck.id === entry.truckId)?.name} · {new Date(entry.time).toLocaleTimeString()} · {index < position ? `Undo ${position - index}` : `Redo ${index - position + 1}`}</small>
+      </button>)}
+    </div>{!entries.length && <p>No edits yet. Your changes will appear here.</p>}
+    <div className="modal-actions"><button className="text-button" onClick={onClose}>Close</button></div>
+  </dialog>
+}
+
+function PaintControls({ part, busy, edit, onFailure }) {
+  const [settings, setSettings] = React.useState(null), [colors, setColors] = React.useState({})
+  React.useEffect(() => {
+    const controller = new AbortController()
+    setSettings(null)
+    api(`/api/paint?path=${encodeURIComponent(part.dataPath)}`, { signal: controller.signal }).then(data => setSettings(data.fields)).catch(error => { if (error.name !== 'AbortError') onFailure(error.message) })
+    return () => controller.abort()
+  }, [part.dataPath])
+  React.useEffect(() => {
+    if (settings) setColors(Object.fromEntries(['base_color', 'mask_r_color', 'mask_g_color', 'mask_b_color', 'flake_color', 'flip_color'].filter(key => settings[key]).map(key => [key, paintHex(part.fields[key] || settings[key])])))
+  }, [settings, part.id, JSON.stringify(part.fields)])
+  if (!settings) return <p className="paint-note">Loading paint settings…</p>
+  const editable = Object.keys(colors).filter(key => settings[key.startsWith('mask_') ? key.replace('_color', '_locked') : key + '_locked'] !== 'true')
+  const changed = editable.filter(key => colors[key] !== paintHex(part.fields[key] || settings[key]))
+  return <div className="paint-controls"><h3>Paint colors</h3><p className="paint-note">Choose a paint job from the catalog, then apply your colors to preview them. Locked colors belong to the selected design.</p>
+    {Object.entries(colors).map(([key, color]) => <label key={key}><span>{({ base_color: 'Base', mask_r_color: 'Design color 1', mask_g_color: 'Design color 2', mask_b_color: 'Design color 3', flake_color: 'Metallic flakes', flip_color: 'Flip color' })[key]}</span><input type="color" aria-label={`Paint ${key}`} value={color} disabled={!editable.includes(key) || busy} onChange={event => setColors(current => ({ ...current, [key]: event.target.value }))}/><small>{editable.includes(key) ? color.toUpperCase() : 'Locked'}</small></label>)}
+    <button className="save-button" disabled={busy || !changed.length} onClick={() => edit({ op: 'paint', accessoryId: part.id, colors: Object.fromEntries(changed.map(key => [key, paintRgb(colors[key])])) })}>Apply colors</button>
   </div>
 }
 
@@ -331,7 +385,7 @@ function CatalogCard({ item, index, advanced, onChoose, onFailure, loadModel, lo
   }
   const hideRotation = () => { hoverRequest.current?.abort(); hoverRequest.current = null; setHoveredModel(null) }
   return <button ref={card} className="catalog-card" onClick={onChoose} style={{ '--card-delay': `${Math.min(index % 14, 13) * 12}ms` }} title={advanced ? `${item.name} · ${item.path}` : item.name}>
-    <span className="card-image" onPointerEnter={showRotation} onPointerLeave={hideRotation} onPointerCancel={hideRotation}>{hoveredModel ? <AnimatedPartPreview model={hoveredModel} label={item.name} onFailure={onFailure}/> : preview ? <img src={preview} loading="lazy" alt=""/> : item.iconUrl ? <img src={item.iconUrl} loading="lazy" alt=""/> : <span className={`part-blueprint ${canPreview ? '' : 'text-only'}`}><span>{failed ? 'Preview unavailable' : canPreview ? 'Loading model' : 'No 3D model'}</span><i/></span>}</span>
+    <span className="card-image" onPointerEnter={showRotation} onPointerLeave={hideRotation} onPointerCancel={hideRotation}>{item.paintFields ? <span className="paint-swatch" style={{ backgroundColor: paintHex(item.paintFields.base_color) }}><span>{["mask_r_color", "mask_g_color", "mask_b_color"].filter(key => item.paintFields[key]).map(key => <i key={key} style={{ backgroundColor: paintHex(item.paintFields[key]) }}/>)}</span></span> : hoveredModel ? <AnimatedPartPreview model={hoveredModel} label={item.name} onFailure={onFailure}/> : preview ? <img src={preview} loading="lazy" alt=""/> : item.iconUrl ? <img src={item.iconUrl} loading="lazy" alt=""/> : <span className={`part-blueprint ${canPreview ? '' : 'text-only'}`}><span>{failed ? 'Preview unavailable' : canPreview ? 'Loading model' : 'No 3D model'}</span><i/></span>}</span>
     <span className="card-copy"><b>{item.name}</b><small>{friendlyCategory(item.category || 'Game part')}{advanced && item.brand ? ` · ${item.brand}` : ''}</small>{advanced && <small className="card-internal">{item.unitId || item.path}</small>}</span>
     <span className="card-add"><Plus size={15}/></span>
   </button>

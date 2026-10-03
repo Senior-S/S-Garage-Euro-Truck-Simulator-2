@@ -29,7 +29,7 @@ Vite proxies API and asset requests to the server on port 8765. `npm run build` 
 ```powershell
 python -m unittest discover -s tests
 cd ui
-node --test tests/scene-update.test.js
+node --test tests/*.test.js
 npm run build
 ```
 

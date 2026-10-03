@@ -236,9 +236,17 @@ class Handler(BaseHTTPRequestHandler):
                             installed_hooks = {item["unitId"] for item in garage.assets.catalog() if item["category"] == "hookup"}
                             if body["hookup"] not in installed_hooks:
                                 raise ValueError("Choose an installed hookup from the parts catalog.")
-                        result = garage.require_session().edit(body, {item["path"]: item for item in garage.assets.catalog()})
+                        definitions = {item["path"]: item for item in garage.assets.catalog()}
+                        if body.get("op") == "paint":
+                            accessory = next((part for part in garage.require_session().state()["truck"]["accessories"] if part["id"] == body.get("accessoryId")), None)
+                            path = body.get("dataPath") or (accessory or {}).get("dataPath")
+                            if path in definitions:
+                                paint = garage.assets.paint_job(path, textures=False)
+                                name = paint["fields"].get("name", definitions[path]["name"]).strip("@").removeprefix("pj_").replace("_", " ").title()
+                                definitions[path] = {**definitions[path], **paint, "name": name}
+                        result = garage.require_session().edit(body, definitions)
                     elif parsed.path in ("/api/undo", "/api/redo"):
-                        result = garage.require_session().history(parsed.path == "/api/redo")
+                        result = garage.require_session().history(parsed.path == "/api/redo", body.get("steps", 1))
                     elif parsed.path == "/api/save":
                         result = garage.require_session().save()
                     else:
@@ -267,6 +275,24 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/state":
                 with garage.lock:
                     self.json_response(garage.require_session().state())
+            elif parsed.path == "/api/paint":
+                entry = garage.assets.definition(query["path"][0])
+                if not entry or entry["category"] != "paint_job":
+                    raise ValueError("Choose an installed paint job.")
+                self.json_response(garage.assets.paint_job(entry["path"], textures=False))
+            elif parsed.path == "/api/paints":
+                entries = []
+                fingerprint = garage.assets._fingerprint()
+                for entry in garage.assets.catalog():
+                    if entry["category"] != "paint_job" or entry["brand"] != query.get("brand", [""])[0]:
+                        continue
+                    paint = garage.assets.paint_job(entry["path"], textures=False, _entry=entry, _fingerprint=fingerprint)
+                    settings = paint["fields"]
+                    name = settings.get("name", entry["name"]).strip("@").removeprefix("pj_").replace("_", " ").title()
+                    signature = [name, {key: value for key, value in settings.items() if key not in ("price", "unlock")}]
+                    entries.append({**entry, "name": name, "paintFields": settings, "suitableFor": paint["suitableFor"],
+                                    "duplicateKey": hashlib.sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()})
+                self.json_response(entries)
             elif parsed.path == "/api/model":
                 request_id = query.get("requestId", [None])[0]
                 if request_id:

@@ -59,6 +59,47 @@ CATALOG = {path: {"path": path} for path in (
 
 
 class SaveTests(unittest.TestCase):
+    def test_multi_step_history_restores_snapshots_and_discards_redo_branch(self):
+        for refund in ("100", "200", "300"):
+            self.session.edit({"op": "fields", "accessoryId": "_nameless.5", "fields": {"refund": refund}}, CATALOG)
+        self.assertEqual(self.session.state()["historyPosition"], 3)
+        self.session.history(steps=2)
+        self.assertEqual(fields(self.session.block("_nameless.5"))["refund"], "100")
+        self.assertEqual(self.session.state()["historyPosition"], 1)
+        self.session.history(True, steps=2)
+        self.assertEqual(fields(self.session.block("_nameless.5"))["refund"], "300")
+        with self.assertRaises(ValueError):
+            self.session.history(steps=4)
+        self.assertEqual(self.session.state()["historyPosition"], 3)
+        self.session.history(steps=2)
+        self.session.edit({"op": "fields", "accessoryId": "_nameless.5", "fields": {"refund": "500"}}, CATALOG)
+        self.assertEqual(len(self.session.state()["history"]), 2)
+        self.assertFalse(self.session.state()["canRedo"])
+
+    def test_paint_defaults_colors_locks_and_shared_accessory_are_undoable(self):
+        original = "/def/vehicle/truck/scania.s_2016/paint_job/color0.sii"
+        target = "/def/vehicle/truck/scania.s_2016/paint_job/custom.sii"
+        text = SOURCE.replace("vehicle_addon_accessory", "vehicle_paint_job_accessory").replace("/def/vehicle/truck/scania.s_2016/accessory/r_grill/bar.sii", original)
+        self.path.write_text(text)
+        session = SaveSession(self.path, text, "test", "Test")
+        catalog = {target: {"path": target, "category": "paint_job", "name": "Custom", "fields": {"base_color": "(0.2, 0.3, 0.4)", "base_color_locked": "false", "mask_r_color": "(1, 0, 0)", "mask_r_locked": "true"}}}
+        result = session.edit({"op": "paint", "accessoryId": "_nameless.6", "dataPath": target, "colors": {"base_color": [0.1, 0.2, 0.3]}}, catalog)
+        private_id = result["editedAccessoryId"]
+        self.assertNotEqual(private_id, "_nameless.6")
+        self.assertEqual(fields(session.block(private_id))["base_color"], "(0.1, 0.2, 0.3)")
+        self.assertEqual(fields(session.block(private_id))["mask_r_color"], "(1, 0, 0)")
+        self.assertIn(original, session.block("_nameless.6"))
+        before = session.render()
+        for colors in ({"mask_r_color": [0, 0, 0]}, {"base_color": [2, 0, 0]}, {"base_color": [float('nan'), 0, 0]}):
+            with self.assertRaises(ValueError):
+                session.edit({"op": "paint", "accessoryId": private_id, "colors": colors}, catalog)
+            self.assertEqual(session.render(), before)
+        session.history()
+        self.assertEqual(session.render(), text)
+        session.history(True)
+        self.assertEqual(session.render(), before)
+        self.assertEqual(SaveSession(self.path, before, "test", "Test").state()["truck"]["accessories"][1]["fields"]["base_color"], "(0.1, 0.2, 0.3)")
+
     @patch("saves.game_running", return_value=False)
     def test_save_rejects_disconnected_accessory_before_backup_or_write(self, _):
         self.session.overrides["_nameless.orphan"] = 'vehicle_addon_accessory : _nameless.orphan {\n data_path: "/def/vehicle/truck/test/accessory/r_grill/bar.sii"\n}\n'

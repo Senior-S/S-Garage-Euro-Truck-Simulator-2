@@ -28,7 +28,7 @@ jobs:
         run: ./build-release.ps1
       - name: Test renderer updates
         working-directory: ui
-        run: node --test tests/scene-update.test.js
+        run: node --test tests/*.test.js
       - name: Verify packaged resources
         shell: powershell
         run: |

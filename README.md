@@ -9,8 +9,8 @@
 
 ### Known missing features and limitations
 
-- **Painting parts is not available yet.** The preview reads existing paint information, but there are no controls to paint or recolor individual parts.
-- **The History button currently does nothing.** Undo and Redo are available during the current editing session, but there is no history viewer.
+- **The published v0.1.0 Windows download does not include the newer paint editor or History window.** These additions are available in the current source build; see [how to run from source](CONTRIBUTING.md#run-from-source).
+- Painting uses truck paint jobs and their supported color channels. Independent recoloring of arbitrary parts is not available, and metallic finishes only approximate the game's shaders.
 - Some parts, materials, lighting, and mod assets may render incorrectly or be missing from the preview.
 - Some accessory combinations may not work correctly in ETS2, even if they appear in the garage.
 
@@ -33,6 +33,7 @@ These are real captures of the app using locally installed game assets. The prev
 - Replace accessories, mix parts across trucks, and duplicate parts or hookups.
 - Browse visual catalog previews that rotate on hover; duplicates stay hidden unless enabled.
 - Undo and redo edits before saving.
+- In the current source build, open History to undo or redo several edits at once, and choose game paint jobs with editable colors.
 - Preview lights in **Off**, **Low**, or **High** mode, including roof and auxiliary lights.
 - Show **All** markers, the **Selected only** marker, or hide them completely.
 - Enable **Advanced view** for internal names and supported save-field editing.

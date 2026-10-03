@@ -6,6 +6,7 @@ import re
 import hashlib
 import json
 from concurrent.futures import CancelledError
+from assets import _numbers
 
 
 IDENTITY = {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}
@@ -77,30 +78,24 @@ def build_scene(truck: dict, assets, cancelled=None, model_cache=None) -> dict:
 
     def place(accessory, model, transform, hookup=None):
         definition = by_path.get(accessory["dataPath"], {})
-        instance_color = accessory["fields"].get("paint_color") or paint_color
+        instance_color = paint_color or accessory["fields"].get("paint_color")
         unit = definition.get("unitId", "").split(".")[0]
         override = paint_job.get("overrides", {}).get(f'{accessory["category"]}.{unit}')
         paint_texture = override or paint_job.get("texture")
         if paint_texture:
             instance_color = paint_fields.get("base_color")
-        color = None
-        if instance_color:
-            import struct
-            values = re.findall(r"&[\da-fA-F]{8}|[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?", instance_color)
-            numbers = [struct.unpack(">f", bytes.fromhex(v[1:]))[0] if v.startswith("&") else float(v) for v in values]
-            if len(numbers) >= 3 and all(math.isfinite(v) for v in numbers):
-                color = numbers[:3]
+        color = _numbers(instance_color)[:3] if instance_color else None
+        paint = None
         # Material metadata identifies paint shaders. Geometry is reused unchanged.
         if color and any(piece["material"].get("paintable") for piece in model["pieces"]):
             paint = {"color": color}
             if paint_texture:
                 paint.update({"paintTexture": paint_texture, "paintColors": [paint_fields.get(name, fallback) for name, fallback in (("mask_r_color", "(1,0,0)"), ("mask_g_color", "(0,1,0)"), ("mask_b_color", "(0,0,1)"))], "airbrush": paint_fields.get("airbrush") == "true", "paintUv": 1})
-                for index, value in enumerate(paint["paintColors"]):
-                    components = re.findall(r"&[\da-fA-F]{8}|[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?", value)
-                    paint["paintColors"][index] = [struct.unpack(">f", bytes.fromhex(v[1:]))[0] if v.startswith("&") else float(v) for v in components][:3]
-            model = {**model, "key": hashlib.sha256(json.dumps([model["key"], paint]).encode()).hexdigest(), "pieces": [{**piece, "material": {**piece["material"], **paint}} if piece["material"].get("paintable") else piece for piece in model["pieces"]]}
+                paint["paintColors"] = [_numbers(value)[:3] for value in paint["paintColors"]]
+            if paint_fields.get("flipflake") == "true":
+                paint.update({"metalness": .75, "roughness": .25, "flipColor": _numbers(paint_fields.get("flip_color", "(0,0,0)"))[:3], "flakeColor": _numbers(paint_fields.get("flake_color", "(1,1,1)"))[:3], "flipStrength": float(paint_fields.get("flip_strength", "1"))})
         parts.append({"id": accessory["id"], "definition": accessory["dataPath"], "category": accessory["category"],
-                      "model": model, "hookup": hookup, **transform})
+                      "model": model, "paint": paint, "hookup": hookup, **transform})
         for diagnostic in model.get("diagnostics", []):
             message = f'{accessory["category"]}: {diagnostic}'
             if message not in issues:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -101,6 +102,8 @@ class SaveSession:
         self.saved: dict[str, str] = {}
         self.undo_stack: list[dict[str, str]] = []
         self.redo_stack: list[dict[str, str]] = []
+        self.undo_entries: list[dict] = []
+        self.redo_entries: list[dict] = []
         self.revision = 0
         player = next((b for t, b in self.units.values() if t == "player"), None)
         if not player:
@@ -164,7 +167,8 @@ class SaveSession:
                 active = {**truck, "accessories": accessories}
         return {"sessionId": self.session_id, "saveId": self.save_id, "saveName": self.name,
                 "trucks": trucks, "truck": active, "canUndo": bool(self.undo_stack), "canRedo": bool(self.redo_stack),
-                "dirty": self.overrides != self.saved, "revision": self.revision}
+                "dirty": self.overrides != self.saved, "revision": self.revision,
+                "history": self.undo_entries + list(reversed(self.redo_entries)), "historyPosition": len(self.undo_entries)}
 
     def edit(self, request: dict, catalog: dict[str, dict]) -> dict:
         truck_id = request.get("truckId", self.truck_id)
@@ -178,7 +182,7 @@ class SaveSession:
             raise ValueError("Choose an accessory from the selected truck.")
         block = self.block(unit_id) if unit_id else ""
         new_id = "_nameless.e75." + uuid.uuid4().hex[:8] + ".0001"
-        if op in ("replace", "fields", "hookup") and any(
+        if op in ("replace", "fields", "hookup", "paint") and any(
             other_id != truck_id and re.search(r"^[ \t]+accessories\[\d+\]: " + re.escape(unit_id) + r"\r?$", self.block(other_id), re.M)
             for other_id in self.units if self.units[other_id][0] in ("vehicle", "trailer", "bus")
         ):
@@ -187,7 +191,28 @@ class SaveSession:
             block = re.sub(r"^(\w+)\s*:\s*[\w.]+", lambda m: f"{m[1]} : {new_id}", block, count=1)
             unit_id = new_id
             changes[truck_id] = set_array(truck, "accessories", ids)
-        if op in ("replace", "add"):
+        if op == "paint":
+            if category(unquote(fields(block)["data_path"])) != "paint_job":
+                raise ValueError("Choose the truck's paint job before painting.")
+            path = request.get("dataPath") or unquote(fields(block)["data_path"])
+            definition = catalog.get(path)
+            if not definition or definition.get("category") != "paint_job":
+                raise ValueError("Choose an installed paint job.")
+            settings = definition.get("fields", {})
+            colors = ("base_color", "mask_r_color", "mask_g_color", "mask_b_color", "flake_color", "flip_color")
+            if path != unquote(fields(block)["data_path"]):
+                block = set_field(block, "data_path", json.dumps(path))
+                for key in colors:
+                    block = set_field(block, key, settings.get(key, "(1, 1, 1)" if key == "base_color" else "(0, 0, 0)"))
+            for key, value in request.get("colors", {}).items():
+                lock = key.replace("_color", "_locked") if key.startswith("mask_") else key + "_locked"
+                if key not in colors or key not in settings or settings.get(lock) == "true":
+                    raise ValueError(f"This paint job does not allow editing {key}.")
+                if not isinstance(value, list) or len(value) != 3 or any(type(v) not in (int, float) or not math.isfinite(v) or not 0 <= v <= 1 for v in value):
+                    raise ValueError("Paint colors must contain three numbers between 0 and 1.")
+                block = set_field(block, key, "(" + ", ".join(format(v, ".9g") for v in value) + ")")
+            changes[unit_id] = block
+        elif op in ("replace", "add"):
             definition = catalog.get(request.get("dataPath"))
             if not definition:
                 raise ValueError("Definition is not in the installed game catalog.")
@@ -278,17 +303,33 @@ class SaveSession:
         self.validate(changes)
         if changes != self.overrides:
             self.undo_stack.append(self.overrides)
+            path = unquote(fields(block).get("data_path", '""')) if block else request.get("dataPath", "")
+            definition = catalog.get(request.get("dataPath") or path, {})
+            label = definition.get("name") or category(path).replace("_", " ").title()
+            action = {"add": "Add", "replace": "Replace", "duplicate": "Duplicate", "remove": "Remove", "fields": "Edit fields on", "paint": "Paint", "hookup": "Change attachment on"}[op]
+            if op == "paint" and request.get("colors"):
+                labels = {"base_color": "base color", "mask_r_color": "design color 1", "mask_g_color": "design color 2", "mask_b_color": "design color 3", "flake_color": "metallic flakes", "flip_color": "flip color"}
+                action = "Change " + ", ".join(labels[key] for key in request["colors"]) + " on"
+            self.undo_entries.append({"label": f"{action} {label}", "truckId": truck_id,
+                                      "time": datetime.now(timezone.utc).isoformat(), "operation": op})
             self.redo_stack.clear()
+            self.redo_entries.clear()
             self.overrides = changes
             self.revision += 1
         self.truck_id = truck_id
         return {**self.state(), "editedAccessoryId": new_id if op in ("add", "duplicate") else unit_id if op != "remove" else None}
 
-    def history(self, redo: bool = False) -> dict:
+    def history(self, redo: bool = False, steps: int = 1) -> dict:
         source, target = (self.redo_stack, self.undo_stack) if redo else (self.undo_stack, self.redo_stack)
-        if source:
+        entries, destination = (self.redo_entries, self.undo_entries) if redo else (self.undo_entries, self.redo_entries)
+        if type(steps) is not int or steps < 1 or steps > max(1, len(source)):
+            raise ValueError("Choose a valid number of history steps.")
+        for _ in range(min(steps, len(source))):
             target.append(self.overrides)
             self.overrides = source.pop()
+            entry = entries.pop()
+            destination.append(entry)
+            self.truck_id = entry["truckId"]
             self.revision += 1
         return self.state()
 

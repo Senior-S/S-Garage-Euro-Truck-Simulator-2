@@ -374,23 +374,28 @@ class AssetStore:
         """Resolve either a definition path or SII unit ID from the imported catalog."""
         return next((item for item in reversed(self.ensure_catalog()) if item["path"].casefold() == path_or_unit.casefold() or item["unitId"].casefold() == path_or_unit.casefold() or item["unitName"].casefold() == path_or_unit.casefold()), None)
 
-    def paint_job(self, path: str, cancelled=None) -> dict:
+    def paint_job(self, path: str, cancelled=None, textures=True, *, _entry=None, _fingerprint=None) -> dict:
         """Import paint masks once, including the game's accessory overrides."""
         with _IMPORT_LOCK:
             cache = self.__dict__.setdefault("_paint_jobs", {})
-            key = (self._fingerprint(), path)
+            fingerprint = _fingerprint or self._fingerprint()
+            key = (fingerprint, path, textures)
             if key in cache:
                 return cache[key]
-            entry = self.definition(path)
+            entry = _entry or self.definition(path)
             if not entry:
                 return {}
-            root = self.cache_path / "catalog" / self._fingerprint()
+            root = self.cache_path / "catalog" / fingerprint
             def expand(file, visited=()):
                 if file in visited:
                     raise ValueError(f"Circular paint job include: {file}")
                 return re.sub(r'@include\s+"([^"\n]+)"', lambda match: expand(file.parent / match[1], (*visited, file)), file.read_text("utf-8"))
             text = expand(root / entry["sourcePath"].lstrip("/"))
             settings = next(_properties(body) for kind, unit, body in _records(text) if unit == entry["unitId"])
+            if not textures:
+                result = {"fields": {name: values[-1] for name, values in settings.items()}, "suitableFor": settings.get("suitable_for[]", [])}
+                cache[key] = result
+                return result
             overrides = {}
             definition_file = root / entry["sourcePath"].lstrip("/")
             override_file = definition_file.parent / "accessory" / definition_file.name
