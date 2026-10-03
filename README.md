@@ -1,5 +1,7 @@
 # S Garage · Euro Truck Simulator 2
 
+[![Total downloads](https://img.shields.io/github/downloads/Senior-S/S-Garage-Euro-Truck-Simulator-2/total?label=Downloads&color=blue)](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/releases)
+
 **A free local 3D truck editor and save editor for ETS2.** Build your truck visually: mix accessories from different trucks, duplicate parts, explore attachment points, and preview changes before loading your save in the game.
 
 **[Download for Windows](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/releases)** · **[Installation guide](docs/INSTALLATION.md)** · **[User guide](docs/USER_GUIDE.md)** · **[Get help](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/issues/new/choose)**
