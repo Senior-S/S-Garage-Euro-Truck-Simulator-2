@@ -4,6 +4,18 @@
 
 **[Download for Windows](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/releases)** · **[Installation guide](docs/INSTALLATION.md)** · **[User guide](docs/USER_GUIDE.md)** · **[Get help](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/issues/new/choose)**
 
+> [!WARNING]
+> **S Garage is a work in progress (WIP), not a finished tool.** Expect bugs, missing features, and differences between the preview and ETS2. Edits may produce a save that does not load correctly in game. Experiment with a separate manual save and keep a backup of your original saves.
+
+### Known missing features and limitations
+
+- **Painting parts is not available yet.** The preview reads existing paint information, but there are no controls to paint or recolor individual parts.
+- **The History button currently does nothing.** Undo and Redo are available during the current editing session, but there is no history viewer.
+- Some parts, materials, lighting, and mod assets may render incorrectly or be missing from the preview.
+- Some accessory combinations may not work correctly in ETS2, even if they appear in the garage.
+
+This list is not exhaustive. Please [report bugs or missing features](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/issues/new/choose), or add **`seniors` on Discord**.
+
 ![S Garage showing a customized Scania in its 3D garage](docs/media/overview.png)
 
 ## See it before downloading
