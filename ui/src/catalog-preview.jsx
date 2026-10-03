@@ -55,7 +55,7 @@ export function clearModelCache() { modelCache.clear() }
 async function buildModelScene(model, signal) {
   if (!model.pieces?.length) throw new Error('This definition has no renderable geometry.')
   const loader = new THREE.TextureLoader(), textures = new Map()
-  const paths = [...new Set(model.pieces.flatMap(piece => [piece.material?.texture, piece.material?.lightMask, piece.material?.lightAlpha]).filter(Boolean))]
+  const paths = [...new Set(model.pieces.flatMap(piece => [piece.material?.texture, piece.material?.paintTexture, piece.material?.lightMask, piece.material?.lightAlpha]).filter(Boolean))]
   const scene = new THREE.Scene(), group = new THREE.Group()
   try {
     const loaded = await Promise.allSettled(paths.map(async path => {
@@ -113,10 +113,10 @@ function disposeModelScene(renderer, scene, textures) {
   renderer?.dispose(); renderer?.forceContextLoss()
 }
 
-function frameModel(camera, radius) {
+function frameModel(camera, radius, paintPreview = false) {
   const vertical = THREE.MathUtils.degToRad(camera.fov / 2), horizontal = Math.atan(Math.tan(vertical) * camera.aspect)
   const distance = radius / Math.sin(Math.min(vertical, horizontal)) * 1.08
-  camera.position.copy(new THREE.Vector3(.62, .24, -.75).normalize().multiplyScalar(distance)); camera.lookAt(0, 0, 0)
+  camera.position.copy(new THREE.Vector3(paintPreview ? 1 : .62, .24, paintPreview ? -.35 : -.75).normalize().multiplyScalar(distance)); camera.lookAt(0, 0, 0)
 }
 
 export async function renderModelThumbnail(model, signal, width = 240, height = 200, cacheKey) {
@@ -128,7 +128,7 @@ export async function renderModelThumbnail(model, signal, width = 240, height = 
     const renderer = thumbnailRenderer
     renderer.setPixelRatio(1); renderer.setSize(width, height, false); renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05
     const camera = new THREE.PerspectiveCamera(31, width / height, .01, 10000)
-    frameModel(camera, built.radius)
+    frameModel(camera, built.radius, model.paintPreview)
     renderer.render(built.scene, camera)
     if (signal?.aborted) throw new DOMException('Preview cancelled', 'AbortError')
     const preview = renderer.domElement.toDataURL('image/png')
@@ -144,7 +144,7 @@ export async function renderModelThumbnail(model, signal, width = 240, height = 
   }
 }
 
-export function AnimatedPartPreview({ model, label, onFailure }) {
+export function AnimatedPartPreview({ model, label, onFailure, onLeave }) {
   const canvasRef = React.useRef(null)
   React.useEffect(() => {
     if (!canvasRef.current) return
@@ -157,19 +157,23 @@ export function AnimatedPartPreview({ model, label, onFailure }) {
       const width = canvas.clientWidth || 240, height = canvas.clientHeight || 144
       renderer.setSize(width, height, false); camera.aspect = width / height; camera.updateProjectionMatrix()
       if (built) {
-        frameModel(camera, built.radius)
+        frameModel(camera, built.radius, model.paintPreview)
       }
     }
     buildModelScene(model, controller.signal).then(result => { if (disposed) { disposeModelScene(renderer, result.scene, result.textures); return } built = result; resize() }).catch(error => { if (!disposed) onFailure?.(error.message) })
     observer = new ResizeObserver(resize); observer.observe(canvas)
+    window.addEventListener('blur', onLeave)
+    document.addEventListener('visibilitychange', onLeave)
+    document.documentElement.addEventListener('pointerleave', onLeave)
     const draw = time => {
+      if (document.hidden || !document.hasFocus() || !canvas.parentElement?.matches(':hover')) { onLeave(); return }
       frame = requestAnimationFrame(draw)
       if (!built) return
       if (previous) built.group.rotation.y += Math.min((time - previous) / 1000, .05) * Math.PI * .8
       previous = time; renderer.render(built.scene, camera)
     }
     frame = requestAnimationFrame(draw)
-    return () => { disposed = true; controller.abort(); cancelAnimationFrame(frame); observer?.disconnect(); if (built) disposeModelScene(renderer, built.scene, built.textures); else { renderer.dispose(); renderer.forceContextLoss() } }
-  }, [model])
+    return () => { disposed = true; controller.abort(); cancelAnimationFrame(frame); observer?.disconnect(); window.removeEventListener('blur', onLeave); document.removeEventListener('visibilitychange', onLeave); document.documentElement.removeEventListener('pointerleave', onLeave); if (built) disposeModelScene(renderer, built.scene, built.textures); else { renderer.dispose(); renderer.forceContextLoss() } }
+  }, [model, onLeave])
   return <canvas ref={canvasRef} className="catalog-preview-3d" aria-label={`${label} rotating model preview`} />
 }

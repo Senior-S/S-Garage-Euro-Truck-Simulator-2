@@ -374,12 +374,14 @@ class AssetStore:
         """Resolve either a definition path or SII unit ID from the imported catalog."""
         return next((item for item in reversed(self.ensure_catalog()) if item["path"].casefold() == path_or_unit.casefold() or item["unitId"].casefold() == path_or_unit.casefold() or item["unitName"].casefold() == path_or_unit.casefold()), None)
 
-    def paint_job(self, path: str, cancelled=None, textures=True, *, _entry=None, _fingerprint=None) -> dict:
+    def paint_job(self, path: str, cancelled=None, textures=True, *, include_overrides=True, _entry=None, _fingerprint=None) -> dict:
         """Import paint masks once, including the game's accessory overrides."""
         with _IMPORT_LOCK:
+            if cancelled and cancelled():
+                raise CancelledError()
             cache = self.__dict__.setdefault("_paint_jobs", {})
             fingerprint = _fingerprint or self._fingerprint()
-            key = (fingerprint, path, textures)
+            key = (fingerprint, path, textures, include_overrides)
             if key in cache:
                 return cache[key]
             entry = _entry or self.definition(path)
@@ -399,13 +401,13 @@ class AssetStore:
             overrides = {}
             definition_file = root / entry["sourcePath"].lstrip("/")
             override_file = definition_file.parent / "accessory" / definition_file.name
-            if override_file.is_file():
+            if include_overrides and override_file.is_file():
                 for kind, unit, body in _records(expand(override_file)):
                     if kind == "simple_paint_job_data":
                         values = _properties(body)
                         for accessory in values.get("acc_list[]", []):
                             overrides[_unquote(accessory)] = values
-            export = self.cache_path / "models" / hashlib.sha256(str(key).encode()).hexdigest()[:20]
+            export = self.cache_path / "models" / hashlib.sha256(str(key[:3]).encode()).hexdigest()[:20]
             def mask(values):
                 resource = _unquote(values.get("paint_job_mask", [""])[-1])
                 if not resource:

@@ -56,6 +56,7 @@ function App() {
   const profileSaves = saves.filter(save => profileId(save) === selectedProfile).sort((a, b) => new Date(b.modified || b.created || 0) - new Date(a.modified || a.created || 0))
   const activeSave = saves.find(save => save.id === state?.saveId)
   const paintPart = state?.truck?.accessories?.find(part => part.category === 'paint_job')
+  const previewCab = state?.truck?.accessories?.find(part => part.category === 'cabin')
   const partLabel = part => paints.find(item => item.path === part.dataPath)?.name || catalog.find(item => item.path === part.dataPath)?.name || friendlyCategory(part.category || part.type)
 
   const applyState = React.useCallback(data => {
@@ -114,10 +115,23 @@ function App() {
   const revisionGuard = () => state ? { sessionId: state.sessionId, revision: state.revision } : {}
   const requestModel = React.useCallback(async (path, signal) => {
     signal.throwIfAborted()
+    if (path.startsWith('[')) {
+      // Paint preview keys include the selected cab, but all paints share its cached geometry.
+      const [cabPath, look, variant, paintPath] = JSON.parse(path)
+      const cabKey = JSON.stringify([cabPath, look, variant])
+      let cab = cachedModel(cabKey)
+      if (!cab) {
+        cab = await requestModel(`${cabPath}?${new URLSearchParams({ ...(look ? { look } : {}), ...(variant ? { variant } : {}) })}`, signal)
+        cacheModel(cabKey, cab)
+      }
+      const paint = await requestModel(`${paintPath}?preview=1`, signal)
+      return { ...cab, paintPreview: true, pieces: cab.pieces.map(piece => piece.material?.paintable ? { ...piece, material: { ...piece.material, ...paint.material } } : piece) }
+    }
+    const [definitionPath, parameters = ''] = path.split('?')
     const requestId = crypto.randomUUID()
     const cancel = () => { send('/api/cancel-model', { requestId }).catch(error => reportError(error.message)) }
     signal.addEventListener('abort', cancel, { once: true })
-    try { return await api(`/api/model?path=${encodeURIComponent(path)}&requestId=${requestId}`, { signal }) }
+    try { return await api(`/api/${parameters === "preview=1" ? "paint" : "model"}?path=${encodeURIComponent(definitionPath)}&requestId=${requestId}&${parameters}`, { signal }) }
     finally { signal.removeEventListener('abort', cancel) }
   }, [reportError])
   const loadModel = React.useCallback((path, signal) => {
@@ -133,7 +147,7 @@ function App() {
     }, signal, true)
   }, [requestModel])
   const loadThumbnail = React.useCallback(async (path, signal, width, height) => {
-    const key = status?.previewVersion ? new URL(`/__catalog_preview/${encodeURIComponent(status.previewVersion)}/${encodeURIComponent(path)}?size=${width}x${height}&render=3`, location.origin).href : null
+    const key = status?.previewVersion ? new URL(`/__catalog_preview/${encodeURIComponent(status.previewVersion)}/${encodeURIComponent(path)}?size=${width}x${height}&render=4`, location.origin).href : null
     const preview = key ? await cachedThumbnail(key) : null
     if (signal.aborted) throw new DOMException('Preview cancelled', 'AbortError')
     if (preview) return preview
@@ -301,7 +315,7 @@ function App() {
           <div className="filter-row"><label><Filter size={13}/><select aria-label="Filter category" value={category} onChange={e => setCategory(e.target.value)}><option value="all">All categories</option>{categories.map(c => <option key={c} value={c}>{friendlyCategory(c)}</option>)}</select><ChevronDown size={12}/></label><label><select aria-label="Filter brand" disabled={category === 'paint_job'} value={category === 'paint_job' ? state?.truck?.brand || brand : brand} onChange={e => setBrand(e.target.value)}><option value="all">All makes</option>{brands.map(b => <option key={b} value={b}>{brandLabel(b)}</option>)}</select><ChevronDown size={12}/></label></div>
           {(chosenSlot || mountPoint) && <div className="target-chip"><span className="slot-lamp"/> Target: {friendlySlot(chosenSlot || mountPoint?.name || 'Mount point')}<button aria-label="Clear selected attachment point" onClick={() => { setSelectedMarker(null); setChosenSlot(''); setMountPoint(null) }}><X size={12}/></button></div>}
           <div className="catalog-result-line"><span>{filtered.length.toLocaleString()} parts</span><label className="duplicates-toggle"><input type="checkbox" checked={showDuplicates} onChange={e => setShowDuplicates(e.target.checked)}/> Show duplicates</label></div>
-          <div className="catalog-grid" key={JSON.stringify([assetVersion, category, query, brand, Boolean(chosenSlot), showDuplicates])}>{filtered.slice(0, catalogLimit).map((item, index) => <CatalogCard key={item.path} item={item} index={index} advanced={advanced} onChoose={() => applyDefinition(item)} onFailure={reportError} loadModel={loadModel} loadThumbnail={loadThumbnail} />)}{filtered.length === 0 && <div className="no-results"><Search size={21}/><span>{chosenSlot ? 'No hookup definitions match this search.' : category === 'paint_job' && paintsLoading ? 'Loading paint jobs...' : 'No parts match this filter.'}</span></div>}{filtered.length > catalogLimit && <button className="load-more" onClick={() => setCatalogLimit(limit => limit + 180)}>Show next {Math.min(180, filtered.length - catalogLimit)} parts <ChevronDown size={13}/></button>}</div>
+          <div className="catalog-grid" key={JSON.stringify([assetVersion, category, query, brand, Boolean(chosenSlot), showDuplicates, previewCab?.dataPath, previewCab?.fields.look, previewCab?.fields.variant])}>{filtered.slice(0, catalogLimit).map((item, index) => <CatalogCard key={item.path} item={item} index={index} advanced={advanced} previewPath={item.paintFields?.paint_job_mask && previewCab ? JSON.stringify([previewCab.dataPath, previewCab.fields.look || null, previewCab.fields.variant || null, item.path]) : item.path} onChoose={() => applyDefinition(item)} onFailure={reportError} loadModel={loadModel} loadThumbnail={loadThumbnail} />)}{filtered.length === 0 && <div className="no-results"><Search size={21}/><span>{chosenSlot ? 'No hookup definitions match this search.' : category === 'paint_job' && paintsLoading ? 'Loading paint jobs...' : 'No parts match this filter.'}</span></div>}{filtered.length > catalogLimit && <button className="load-more" onClick={() => setCatalogLimit(limit => limit + 180)}>Show next {Math.min(180, filtered.length - catalogLimit)} parts <ChevronDown size={13}/></button>}</div>
           <div className="catalog-foot"><span><span className={`small-status-dot ${catalogLoading ? 'loading-dot' : ''}`}/>{catalogLoading ? 'IMPORTING GAME ASSETS' : 'CATALOG FROM GAME DATA'}</span><span>{filtered.length > catalogLimit ? `Showing ${catalogLimit} of ` : ''}{filtered.length}</span></div>
         </>}
       </aside>
@@ -346,14 +360,17 @@ function PaintControls({ part, busy, edit, onFailure }) {
   const changed = editable.filter(key => colors[key] !== paintHex(part.fields[key] || settings[key]))
   return <div className="paint-controls"><h3>Paint colors</h3><p className="paint-note">Choose a paint job from the catalog, then apply your colors to preview them. Locked colors belong to the selected design.</p>
     {Object.entries(colors).map(([key, color]) => <label key={key}><span>{({ base_color: 'Base', mask_r_color: 'Design color 1', mask_g_color: 'Design color 2', mask_b_color: 'Design color 3', flake_color: 'Metallic flakes', flip_color: 'Flip color' })[key]}</span><input type="color" aria-label={`Paint ${key}`} value={color} disabled={!editable.includes(key) || busy} onChange={event => setColors(current => ({ ...current, [key]: event.target.value }))}/><small>{editable.includes(key) ? color.toUpperCase() : 'Locked'}</small></label>)}
-    <button className="save-button" disabled={busy || !changed.length} onClick={() => edit({ op: 'paint', accessoryId: part.id, colors: Object.fromEntries(changed.map(key => [key, paintRgb(colors[key])])) })}>Apply colors</button>
+    <div className="paint-actions"><button className="text-button" disabled={busy} onClick={() => {
+      setColors(Object.fromEntries(Object.keys(colors).map(key => [key, paintHex(settings[key])])))
+      edit({ op: 'paint', accessoryId: part.id, resetColors: true })
+    }}>Reset colors</button><button className="save-button" disabled={busy || !changed.length} onClick={() => edit({ op: 'paint', accessoryId: part.id, colors: Object.fromEntries(changed.map(key => [key, paintRgb(colors[key])])) })}>Apply colors</button></div>
   </div>
 }
 
-function CatalogCard({ item, index, advanced, onChoose, onFailure, loadModel, loadThumbnail }) {
+function CatalogCard({ item, index, advanced, previewPath, onChoose, onFailure, loadModel, loadThumbnail }) {
   const card = React.useRef(null), hoverRequest = React.useRef(null)
   const [preview, setPreview] = React.useState(''), [hoveredModel, setHoveredModel] = React.useState(null), [failed, setFailed] = React.useState(false)
-  const canPreview = !!item.model
+  const canPreview = !!item.model || previewPath !== item.path
   React.useEffect(() => {
     if (!canPreview || !card.current) return
     let controller
@@ -365,27 +382,27 @@ function CatalogCard({ item, index, advanced, onChoose, onFailure, loadModel, lo
       controller = new AbortController()
       const request = controller
       const image = card.current.querySelector('.card-image')
-      loadThumbnail(item.path, request.signal, Math.round(image.clientWidth * 1.5), Math.round(image.clientHeight * 1.5)).then(preview => {
+      loadThumbnail(previewPath, request.signal, Math.round(image.clientWidth * 1.5), Math.round(image.clientHeight * 1.5)).then(preview => {
         if (!request.signal.aborted) { completed = true; setPreview(preview); observer.disconnect() }
       }).catch(error => { if (error.name !== 'AbortError') { completed = true; observer.disconnect(); setFailed(true); onFailure(`${item.name}: ${error.message}`) } })
     }, { root: document.querySelector('.catalog-grid'), rootMargin: '0px' })
     observer.observe(card.current)
     return () => { observer.disconnect(); controller?.abort() }
-  }, [canPreview, item.path, item.name, loadThumbnail, onFailure])
+  }, [canPreview, previewPath, item.name, loadThumbnail, onFailure])
   React.useEffect(() => () => hoverRequest.current?.abort(), [])
+  const hideRotation = React.useCallback(() => { hoverRequest.current?.abort(); hoverRequest.current = null; setHoveredModel(null) }, [])
   const showRotation = () => {
     if (!canPreview) return
     hoverRequest.current?.abort()
     const controller = new AbortController(); hoverRequest.current = controller
-    const cached = cachedModel(item.path)
+    const cached = cachedModel(previewPath)
     if (cached) { setHoveredModel(cached); return }
-    loadModel(item.path, controller.signal).then(model => {
-      if (!controller.signal.aborted) setHoveredModel(model)
+    loadModel(previewPath, controller.signal).then(model => {
+      if (!controller.signal.aborted && document.hasFocus() && card.current?.querySelector('.card-image')?.matches(':hover')) setHoveredModel(model)
     }).catch(error => { if (error.name !== 'AbortError') { setFailed(true); onFailure(`${item.name}: ${error.message}`) } })
   }
-  const hideRotation = () => { hoverRequest.current?.abort(); hoverRequest.current = null; setHoveredModel(null) }
   return <button ref={card} className="catalog-card" onClick={onChoose} style={{ '--card-delay': `${Math.min(index % 14, 13) * 12}ms` }} title={advanced ? `${item.name} · ${item.path}` : item.name}>
-    <span className="card-image" onPointerEnter={showRotation} onPointerLeave={hideRotation} onPointerCancel={hideRotation}>{item.paintFields ? <span className="paint-swatch" style={{ backgroundColor: paintHex(item.paintFields.base_color) }}><span>{["mask_r_color", "mask_g_color", "mask_b_color"].filter(key => item.paintFields[key]).map(key => <i key={key} style={{ backgroundColor: paintHex(item.paintFields[key]) }}/>)}</span></span> : hoveredModel ? <AnimatedPartPreview model={hoveredModel} label={item.name} onFailure={onFailure}/> : preview ? <img src={preview} loading="lazy" alt=""/> : item.iconUrl ? <img src={item.iconUrl} loading="lazy" alt=""/> : <span className={`part-blueprint ${canPreview ? '' : 'text-only'}`}><span>{failed ? 'Preview unavailable' : canPreview ? 'Loading model' : 'No 3D model'}</span><i/></span>}</span>
+    <span className="card-image" onPointerEnter={showRotation} onPointerLeave={hideRotation} onPointerCancel={hideRotation}>{item.paintFields && !canPreview ? <span className="paint-swatch" style={{ backgroundColor: paintHex(item.paintFields.base_color) }}><span>{["mask_r_color", "mask_g_color", "mask_b_color"].filter(key => item.paintFields[key]).map(key => <i key={key} style={{ backgroundColor: paintHex(item.paintFields[key]) }}/>)}</span></span> : hoveredModel ? <AnimatedPartPreview model={hoveredModel} label={item.name} onFailure={onFailure} onLeave={hideRotation}/> : preview ? <img src={preview} loading="lazy" alt=""/> : item.iconUrl ? <img src={item.iconUrl} loading="lazy" alt=""/> : <span className={`part-blueprint ${canPreview ? '' : 'text-only'}`}><span>{failed ? 'Preview unavailable' : canPreview ? 'Loading model' : 'No 3D model'}</span><i/></span>}</span>
     <span className="card-copy"><b>{item.name}</b><small>{friendlyCategory(item.category || 'Game part')}{advanced && item.brand ? ` · ${item.brand}` : ''}</small>{advanced && <small className="card-internal">{item.unitId || item.path}</small>}</span>
     <span className="card-add"><Plus size={15}/></span>
   </button>

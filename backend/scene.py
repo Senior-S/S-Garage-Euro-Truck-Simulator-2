@@ -12,6 +12,17 @@ from assets import _numbers
 IDENTITY = {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}
 
 
+def paint_material(color: list, fields: dict, paint_texture: str | None = None) -> dict:
+    """Use the same paint shader settings for installed parts and catalog previews."""
+    paint = {"color": color}
+    if paint_texture:
+        paint.update({"paintTexture": paint_texture, "paintColors": [fields.get(name, fallback) for name, fallback in (("mask_r_color", "(1,0,0)"), ("mask_g_color", "(0,1,0)"), ("mask_b_color", "(0,0,1)"))], "airbrush": fields.get("airbrush") == "true", "paintUv": 1})
+        paint["paintColors"] = [_numbers(value)[:3] for value in paint["paintColors"]]
+    if fields.get("flipflake") == "true":
+        paint.update({"metalness": .75, "roughness": .25, "flipColor": _numbers(fields.get("flip_color", "(0,0,0)"))[:3], "flakeColor": _numbers(fields.get("flake_color", "(1,1,1)"))[:3], "flipStrength": float(fields.get("flip_strength", "1"))})
+    return paint
+
+
 def multiply(a: list, b: list) -> list:
     ax, ay, az, aw = a
     bx, by, bz, bw = b
@@ -88,12 +99,7 @@ def build_scene(truck: dict, assets, cancelled=None, model_cache=None) -> dict:
         paint = None
         # Material metadata identifies paint shaders. Geometry is reused unchanged.
         if color and any(piece["material"].get("paintable") for piece in model["pieces"]):
-            paint = {"color": color}
-            if paint_texture:
-                paint.update({"paintTexture": paint_texture, "paintColors": [paint_fields.get(name, fallback) for name, fallback in (("mask_r_color", "(1,0,0)"), ("mask_g_color", "(0,1,0)"), ("mask_b_color", "(0,0,1)"))], "airbrush": paint_fields.get("airbrush") == "true", "paintUv": 1})
-                paint["paintColors"] = [_numbers(value)[:3] for value in paint["paintColors"]]
-            if paint_fields.get("flipflake") == "true":
-                paint.update({"metalness": .75, "roughness": .25, "flipColor": _numbers(paint_fields.get("flip_color", "(0,0,0)"))[:3], "flakeColor": _numbers(paint_fields.get("flake_color", "(1,1,1)"))[:3], "flipStrength": float(paint_fields.get("flip_strength", "1"))})
+            paint = paint_material(color, paint_fields, paint_texture)
         parts.append({"id": accessory["id"], "definition": accessory["dataPath"], "category": accessory["category"],
                       "model": model, "paint": paint, "hookup": hookup, **transform})
         for diagnostic in model.get("diagnostics", []):

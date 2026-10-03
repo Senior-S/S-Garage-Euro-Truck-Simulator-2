@@ -29,12 +29,18 @@ class AssetParserTests(unittest.TestCase):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 Image.new("RGBA", (1, 1), (0, 0, 0, 0)).save(target)
             with patch.object(store, "_run", side_effect=export) as run:
+                preview = store.paint_job(path, include_overrides=False)
+                self.assertEqual(preview["overrides"], {})
+                self.assertEqual(run.call_count, 1)
                 job = store.paint_job(path)
                 self.assertEqual(job["fields"]["base_color"], "(1,1,1)")
                 self.assertEqual(set(job["overrides"]), {"sunshld.painted", "mirror.painted"})
                 self.assertIs(store.paint_job(path), job)
                 self.assertEqual(run.call_count, 2)
                 self.assertTrue(job["texture"].endswith(".opaque.png"))
+                self.assertEqual(preview["texture"], job["texture"])
+                with self.assertRaises(CancelledError):
+                    store.paint_job(path, cancelled=lambda: True, include_overrides=False)
 
     def test_packed_light_mask_preserves_rgb_when_alpha_is_zero(self):
         with tempfile.TemporaryDirectory() as temp:

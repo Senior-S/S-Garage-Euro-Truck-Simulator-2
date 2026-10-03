@@ -9,7 +9,7 @@
 
 ### Known missing features and limitations
 
-- **The published v0.1.0 Windows download does not include the newer paint editor or History window.** These additions are available in the current source build; see [how to run from source](CONTRIBUTING.md#run-from-source).
+- **v0.2.0 includes the paint editor and History window.** This remains a prerelease; keep backups and inspect edited trucks in ETS2.
 - Painting uses truck paint jobs and their supported color channels. Independent recoloring of arbitrary parts is not available, and metallic finishes only approximate the game's shaders.
 - Some parts, materials, lighting, and mod assets may render incorrectly or be missing from the preview.
 - Some accessory combinations may not work correctly in ETS2, even if they appear in the garage.
@@ -33,7 +33,7 @@ These are real captures of the app using locally installed game assets. The prev
 - Replace accessories, mix parts across trucks, and duplicate parts or hookups.
 - Browse visual catalog previews that rotate on hover; duplicates stay hidden unless enabled.
 - Undo and redo edits before saving.
-- In the current source build, open History to undo or redo several edits at once, and choose game paint jobs with editable colors.
+- Open History to undo or redo several edits at once, and choose game paint jobs with editable colors. Artwork paints show rotating cab previews; customized palettes carry across paint changes, and Reset colors restores a design's defaults.
 - Preview lights in **Off**, **Low**, or **High** mode, including roof and auxiliary lights.
 - Show **All** markers, the **Selected only** marker, or hide them completely.
 - Enable **Advanced view** for internal names and supported save-field editing.
@@ -45,7 +45,7 @@ These are real captures of the app using locally installed game assets. The prev
 You need **Windows 10/11, 64-bit**, an installed copy of **Euro Truck Simulator 2**, and a browser with WebGL support. S Garage uses your installed game, DLC, and available mods. Game assets and saves are not included in the download.
 
 1. Open the **[Downloads page](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/releases)**. A GitHub account is not required.
-2. Under **Assets**, download **`S-Garage-v0.1.0-Windows-x64.zip`**. Choose this file instead of GitHub's automatically generated “Source code” downloads.
+2. Under **Assets**, download **`S-Garage-v0.2.0-Windows-x64.zip`**. Choose this file instead of GitHub's automatically generated “Source code” downloads.
 3. Right-click the ZIP and select **Extract All**. Keep the extracted files together.
 4. Open the extracted **S Garage** folder and double-click **`S Garage.exe`**.
 5. Your browser opens the garage. Keep the small S Garage window open while editing; use **Stop garage** when finished.

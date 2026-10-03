@@ -50,7 +50,9 @@ body,.app-shell{background:#141820;color:var(--text)}
 .paint-controls label>span{flex:1}
 .paint-controls input[type=color]{width:36px;height:30px;padding:2px;background:#202630;border:1px solid #526278;cursor:pointer}
 .paint-controls label small{min-width:60px;font:10px var(--mono);color:#b0bac8}
-.paint-controls .save-button{width:100%;margin-top:16px}
+.paint-actions{display:flex;gap:8px;margin-top:16px}
+.paint-actions>button{flex:1;justify-content:center;white-space:nowrap;padding:0 8px;font-size:11px}
+.paint-actions .save-button{margin:0}
 .paint-swatch{position:absolute;inset:14px;display:flex;align-items:end;border-radius:3px;border:1px solid #ffffff30}
 .paint-swatch>span{display:flex;width:100%;height:35%}
 .paint-swatch i{flex:1}

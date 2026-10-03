@@ -31,11 +31,15 @@ Mixed-brand parts can lack a compatible locator or behave differently in game. A
 
 ## Paint your truck
 
-Click **Paint** above the 3D view, or select the installed paint job. The catalog shows paint jobs from your installed game, DLC, and mods for the current truck and cab. Its color swatches show each design's default palette.
+Click **Paint** above the 3D view, or select the installed paint job. The catalog shows paint jobs from your installed game, DLC, and mods for the current truck and cab. Designs with artwork show that artwork on your selected cab, using the paint's default colors. Hover over a preview to rotate it and see both sides. Plain-color paints keep their color swatches.
+
+Only visible previews load, and thumbnails are cached locally. Switching categories cancels unfinished previews. Browsing or hovering over a paint does not change your truck or its edit history.
 
 Choose a paint job to apply it to the truck preview. In **Paint colors** on the left, change the base, design, metallic-flake, or flip colors supported by that paint job, then click **Apply colors**. Colors marked **Locked** cannot be edited for that design. Each application is one undoable change; your save is written only when you click **Save changes**.
 
 The preview approximates the game's paint shaders, including metallic finishes. Inspect the result in ETS2 after saving.
+
+Switching paint jobs carries your whole palette if you customized any color. If the current paint still has its default palette, the new paint uses its own defaults. Locked colors always follow the new design. **Reset colors**, beside **Apply colors**, restores the selected paint's original palette immediately; you can undo that reset.
 
 ## Undo and advanced controls
 

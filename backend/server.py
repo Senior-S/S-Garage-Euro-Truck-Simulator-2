@@ -17,9 +17,9 @@ import traceback
 from urllib.parse import parse_qs, unquote, urlsplit
 import webbrowser
 
-from assets import AssetStore
+from assets import AssetStore, _numbers
 from saves import SaveSession, read_sii, game_running
-from scene import build_scene
+from scene import build_scene, paint_material
 from mods import resolve_mods
 
 
@@ -240,6 +240,9 @@ class Handler(BaseHTTPRequestHandler):
                         if body.get("op") == "paint":
                             accessory = next((part for part in garage.require_session().state()["truck"]["accessories"] if part["id"] == body.get("accessoryId")), None)
                             path = body.get("dataPath") or (accessory or {}).get("dataPath")
+                            old_path = (accessory or {}).get("dataPath")
+                            if old_path in definitions and old_path != path:
+                                definitions[old_path] = {**definitions[old_path], **garage.assets.paint_job(old_path, textures=False)}
                             if path in definitions:
                                 paint = garage.assets.paint_job(path, textures=False)
                                 name = paint["fields"].get("name", definitions[path]["name"]).strip("@").removeprefix("pj_").replace("_", " ").title()
@@ -279,7 +282,20 @@ class Handler(BaseHTTPRequestHandler):
                 entry = garage.assets.definition(query["path"][0])
                 if not entry or entry["category"] != "paint_job":
                     raise ValueError("Choose an installed paint job.")
-                self.json_response(garage.assets.paint_job(entry["path"], textures=False))
+                preview = query.get("preview", [""])[0] == "1"
+                cancelled = None
+                request_id = query.get("requestId", [None])[0]
+                if request_id:
+                    with garage.model_request_lock:
+                        cancelled = garage.model_requests.setdefault(request_id, threading.Event())
+                        while len(garage.model_requests) > 256:
+                            garage.model_requests.pop(next(iter(garage.model_requests)))
+                paint = garage.assets.paint_job(entry["path"], textures=preview, include_overrides=False, cancelled=cancelled.is_set if cancelled else None)
+                if preview:
+                    fields = paint["fields"]
+                    material = paint_material(_numbers(fields.get("base_color", "(1,1,1)"))[:3], fields, paint.get("texture"))
+                    paint = {**paint, "material": material}
+                self.json_response(paint)
             elif parsed.path == "/api/paints":
                 entries = []
                 fingerprint = garage.assets._fingerprint()
@@ -302,9 +318,9 @@ class Handler(BaseHTTPRequestHandler):
                             garage.model_requests.pop(next(iter(garage.model_requests)))
                     if cancelled.is_set():
                         raise CancelledError()
-                    self.json_response(garage.assets.model(query["path"][0], cancelled=cancelled.is_set))
+                    self.json_response(garage.assets.model(query["path"][0], cancelled=cancelled.is_set, **{name: query[name][0] for name in ("look", "variant") if name in query}))
                 else:
-                    self.json_response(garage.assets.model(query["path"][0]))
+                    self.json_response(garage.assets.model(query["path"][0], **{name: query[name][0] for name in ("look", "variant") if name in query}))
             elif parsed.path == "/api/scene":
                 with garage.lock:
                     session = garage.require_session()

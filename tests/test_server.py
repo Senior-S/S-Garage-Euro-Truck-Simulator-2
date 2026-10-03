@@ -33,6 +33,27 @@ class MinimalAssets:
 
 
 class ServerTests(unittest.TestCase):
+    def test_paint_preview_uses_default_design_colors_without_editing_save(self):
+        self.request("/api/load", {"saveId": "profiles/54455354/quicksave"})
+        before = self.request("/api/state")[1]
+        job = {"fields": {"base_color": "(1,.5,0)", "mask_r_color": "(0,1,0)", "airbrush": "true"}, "texture": "/cache/design.png", "overrides": {}}
+        with patch.object(self.http.garage.assets, "definition", return_value={"path": "/paint", "category": "paint_job"}, create=True), patch.object(self.http.garage.assets, "paint_job", return_value=job, create=True) as load:
+            code, preview = self.request("/api/paint?path=/paint&preview=1&requestId=paint-preview")
+            self.assertEqual(code, 200)
+            self.assertEqual(preview["material"]["color"], [1, .5, 0])
+            self.assertEqual(preview["material"]["paintColors"][0], [0, 1, 0])
+            self.assertTrue(preview["material"]["airbrush"])
+            self.assertEqual(preview["material"]["paintTexture"], "/cache/design.png")
+            self.assertFalse(load.call_args.kwargs["include_overrides"])
+            self.assertIsNotNone(load.call_args.kwargs["cancelled"])
+        self.assertEqual(self.request("/api/state")[1], before)
+
+    def test_catalog_cab_preview_preserves_selected_look_and_variant(self):
+        with patch.object(self.http.garage.assets, "model", return_value={"pieces": []}, create=True) as model:
+            self.assertEqual(self.request("/api/model?path=/cab&look=paint&variant=high&requestId=cab-preview")[0], 200)
+            self.assertEqual(model.call_args.kwargs["look"], "paint")
+            self.assertEqual(model.call_args.kwargs["variant"], "high")
+
     def test_scene_update_sends_only_new_models_and_recovers_from_unknown_revision(self):
         self.request("/api/load", {"saveId": "profiles/54455354/quicksave"})
         calls = []

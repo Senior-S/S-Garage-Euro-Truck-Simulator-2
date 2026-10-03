@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import uuid
 from datetime import datetime, timezone
+from assets import _numbers
 
 
 UNIT = re.compile(r"^(\w+)\s*:\s*([\w.]+)\s*\{\r?\n.*?^\}", re.M | re.S)
@@ -200,10 +201,18 @@ class SaveSession:
                 raise ValueError("Choose an installed paint job.")
             settings = definition.get("fields", {})
             colors = ("base_color", "mask_r_color", "mask_g_color", "mask_b_color", "flake_color", "flip_color")
-            if path != unquote(fields(block)["data_path"]):
+            current = fields(block)
+            old_path = unquote(current["data_path"])
+            defaults = catalog.get(old_path, {}).get("fields", {})
+            customized = any(key in defaults and any(not math.isclose(a, b, rel_tol=1e-7, abs_tol=1e-8) for a, b in zip(_numbers(current.get(key, defaults[key])), _numbers(defaults[key]))) for key in colors)
+            if path != old_path or request.get("resetColors"):
                 block = set_field(block, "data_path", json.dumps(path))
                 for key in colors:
-                    block = set_field(block, key, settings.get(key, "(1, 1, 1)" if key == "base_color" else "(0, 0, 0)"))
+                    lock = key.replace("_color", "_locked") if key.startswith("mask_") else key + "_locked"
+                    value = settings.get(key, "(1, 1, 1)" if key == "base_color" else "(0, 0, 0)")
+                    if customized and not request.get("resetColors") and settings.get(lock) != "true":
+                        value = current.get(key, defaults.get(key, value))
+                    block = set_field(block, key, value)
             for key, value in request.get("colors", {}).items():
                 lock = key.replace("_color", "_locked") if key.startswith("mask_") else key + "_locked"
                 if key not in colors or key not in settings or settings.get(lock) == "true":
@@ -310,6 +319,8 @@ class SaveSession:
             if op == "paint" and request.get("colors"):
                 labels = {"base_color": "base color", "mask_r_color": "design color 1", "mask_g_color": "design color 2", "mask_b_color": "design color 3", "flake_color": "metallic flakes", "flip_color": "flip color"}
                 action = "Change " + ", ".join(labels[key] for key in request["colors"]) + " on"
+            elif op == "paint" and request.get("resetColors"):
+                action = "Reset colors on"
             self.undo_entries.append({"label": f"{action} {label}", "truckId": truck_id,
                                       "time": datetime.now(timezone.utc).isoformat(), "operation": op})
             self.redo_stack.clear()
