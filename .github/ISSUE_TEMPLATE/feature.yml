@@ -1,0 +1,16 @@
+name: Suggest an improvement
+description: Share an idea for the garage.
+title: '[Idea] '
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would you like to do?
+      description: Explain the task or difficulty you want the app to address.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your suggestion
+      description: Screenshots or examples are welcome.

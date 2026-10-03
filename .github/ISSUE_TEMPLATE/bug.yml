@@ -1,0 +1,30 @@
+name: Report a problem
+description: Something does not work in S Garage.
+title: '[Bug] '
+body:
+  - type: markdown
+    attributes:
+      value: 'Need help outside GitHub? Add **seniors** on Discord. Remove private paths/usernames from logs; do not attach private saves publicly.'
+  - type: input
+    id: versions
+    attributes:
+      label: S Garage and ETS2 versions
+      placeholder: 'S Garage v0.1.0, ETS2 version ..., Windows 11'
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What did you do, and what happened?
+      description: Include the truck/accessory and relevant DLC or mods.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshots or error messages
+      description: Paste the error or drag a screenshot here. Startup logs are in %LOCALAPPDATA%\ETS2Garage\server-errors.log.
