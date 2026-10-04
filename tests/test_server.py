@@ -42,6 +42,7 @@ class ServerTests(unittest.TestCase):
         with patch.object(server, "AssetStore", MinimalAssets), patch.object(server, "game_running", return_value=False):
             code, result = self.request("/api/config", {"cachePath": str(target), "profilesPath": str(self.http.garage.profiles)})
         self.assertEqual(code, 200, result)
+        target = target.resolve()
         self.assertEqual(Path(result["cachePath"]), target)
         self.assertTrue(target.is_dir())
         self.assertEqual((old_cache / "existing.txt").read_text(), "keep")
