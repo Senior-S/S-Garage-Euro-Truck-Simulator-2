@@ -234,11 +234,12 @@ class SaveTests(unittest.TestCase):
         self.assertEqual(self.path.read_bytes(), b"external edit")
 
     @patch("saves.game_running", return_value=True)
-    def test_running_game_prevents_write(self, _):
+    def test_running_game_allows_write_with_backup(self, _):
         self.session.edit({"op": "duplicate", "accessoryId": "_nameless.6"}, CATALOG)
-        with self.assertRaisesRegex(ValueError, "Close ETS2"):
-            self.session.save()
-        self.assertEqual(self.path.read_bytes(), SOURCE.encode())
+        result = self.session.save()
+        self.assertFalse(result["state"]["dirty"])
+        self.assertNotEqual(self.path.read_bytes(), SOURCE.encode())
+        self.assertEqual((Path(result["backupPath"]) / "game.sii").read_bytes(), SOURCE.encode())
 
     def test_duplicate_then_remove_does_not_serialize_orphans(self):
         self.session.edit({"op": "duplicate", "accessoryId": "_nameless.6"}, CATALOG)

@@ -44,7 +44,7 @@ class Garage:
         if self.config.get("toolPath"):
             os.environ["ETS_GARAGE_CONVERTER"] = self.config["toolPath"]
         self.profiles = Path(self.config.get("profilesPath") or default_profiles()).resolve()
-        self.assets = AssetStore(self.config.get("gamePath"), DATA / "cache")
+        self.assets = AssetStore(self.config.get("gamePath"), Path(self.config.get("cachePath") or DATA / "cache").expanduser().resolve())
         self.session: SaveSession | None = None
         self.lock = threading.RLock()
         self.scene_cache = None
@@ -204,7 +204,7 @@ class Handler(BaseHTTPRequestHandler):
                         if garage.session and garage.session.state()["dirty"]:
                             raise ValueError("Save or discard your truck edits before changing game folders.")
                         config = dict(garage.config)
-                        for name in ("gamePath", "profilesPath", "decryptorPath", "toolPath"):
+                        for name in ("gamePath", "profilesPath", "decryptorPath", "toolPath", "cachePath"):
                             if name in body:
                                 value = body[name]
                                 if not isinstance(value, str):
@@ -220,7 +220,12 @@ class Handler(BaseHTTPRequestHandler):
                                 raise ValueError(f"{key} does not exist.")
                         if config.get("toolPath"):
                             os.environ["ETS_GARAGE_CONVERTER"] = config["toolPath"]
-                        assets = AssetStore(config.get("gamePath"), DATA / "cache")
+                        cache = Path(config.get("cachePath") or garage.config_file.parent / "cache").expanduser().resolve()
+                        if cache.exists() and not cache.is_dir():
+                            raise ValueError("Cache folder must be a directory.")
+                        cache.mkdir(parents=True, exist_ok=True)
+                        config["cachePath"] = str(cache)
+                        assets = AssetStore(config.get("gamePath"), cache)
                         garage.config_file.write_text(json.dumps(config, indent=2), "utf-8")
                         garage.config, garage.profiles, garage.assets = config, profiles, assets
                         garage.session = None

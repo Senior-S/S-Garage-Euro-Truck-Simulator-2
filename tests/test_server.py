@@ -33,6 +33,32 @@ class MinimalAssets:
 
 
 class ServerTests(unittest.TestCase):
+    def test_cache_folder_change_persists_and_preserves_old_cache(self):
+        garage = self.http.garage
+        old_cache = garage.assets.cache_path
+        old_cache.mkdir(parents=True)
+        (old_cache / "existing.txt").write_text("keep", encoding="utf-8")
+        target = Path(self.temporary.name) / "custom" / "cache"
+        with patch.object(server, "AssetStore", MinimalAssets), patch.object(server, "game_running", return_value=False):
+            code, result = self.request("/api/config", {"cachePath": str(target)})
+        self.assertEqual(code, 200)
+        self.assertEqual(Path(result["cachePath"]), target)
+        self.assertTrue(target.is_dir())
+        self.assertEqual((old_cache / "existing.txt").read_text(), "keep")
+        self.assertEqual(json.loads(garage.config_file.read_text())["cachePath"], str(target))
+        with patch.object(server, "DATA", garage.config_file.parent), patch.object(server, "default_profiles", return_value=garage.profiles), patch.object(server, "AssetStore", MinimalAssets):
+            self.assertEqual(server.Garage().assets.cache_path, target)
+
+    def test_cache_folder_rejects_file_without_changing_settings(self):
+        target = Path(self.temporary.name) / "file.txt"
+        target.write_text("occupied", encoding="utf-8")
+        before = self.http.garage.assets
+        code, result = self.request("/api/config", {"cachePath": str(target)})
+        self.assertEqual(code, 400)
+        self.assertIn("error", result)
+        self.assertIs(self.http.garage.assets, before)
+        self.assertFalse(self.http.garage.config_file.exists())
+
     def test_paint_preview_uses_default_design_colors_without_editing_save(self):
         self.request("/api/load", {"saveId": "profiles/54455354/quicksave"})
         before = self.request("/api/state")[1]
@@ -142,8 +168,8 @@ class ServerTests(unittest.TestCase):
         except HTTPError as error:
             return error.code, json.load(error)
 
-    @patch("saves.game_running", return_value=False)
-    def test_load_duplicate_undo_redo_and_backup_over_http(self, _):
+    @patch("saves.game_running", return_value=True)
+    def test_load_duplicate_undo_redo_and_backup_with_game_running_over_http(self, _):
         code, saves = self.request("/api/saves")
         self.assertEqual(code, 200)
         code, state = self.request("/api/load", {"saveId": saves[0]["id"]})

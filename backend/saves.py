@@ -358,8 +358,6 @@ class SaveSession:
         return text
 
     def save(self) -> dict:
-        if game_running():
-            raise ValueError("Close ETS2 before writing this save. Then load it in the game after saving.")
         if hashlib.sha256(self.path.read_bytes()).hexdigest() != self.source_hash:
             raise ValueError("The save changed outside the garage. Reload it before writing.")
         self.validate(self.overrides)

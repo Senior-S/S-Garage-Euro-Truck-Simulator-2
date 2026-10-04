@@ -86,3 +86,7 @@ body,.app-shell{background:#141820;color:var(--text)}
 .guide-window a{display:inline-flex;align-items:center;gap:4px;color:var(--amber);font-size:13px;text-underline-offset:3px}
 .guide-window .guide-note{font-size:11px;color:#929c94}
 @media(prefers-reduced-motion:reduce){.refresh-spinning{animation:none}}
+
+.settings-modal{max-height:calc(100vh - 32px);overflow:auto}
+
+.game-save-warning{display:flex;align-items:center;gap:10px;flex-shrink:0;padding:10px 16px;border-bottom:1px solid #82643e;background:#30291f;color:#f0c88e;font-size:12px;line-height:1.5}.game-save-warning svg{flex-shrink:0}

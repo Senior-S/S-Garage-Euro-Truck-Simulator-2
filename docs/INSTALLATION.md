@@ -45,15 +45,15 @@ Choose your **Profile**, **Save file**, and **Truck**. Saves are ordered newest 
 
 Make a separate manual save in ETS2 for your first experiment. Open it in S Garage and edit your truck.
 
-**Close ETS2 before clicking Save changes.** The app refuses to write while the game is running. It also refuses to overwrite a save changed externally since opening it; reopen the updated save instead.
+**Saving with ETS2 open is supported, with a warning.** Load the edited save before saving again in game, or ETS2 may overwrite your changes. The app still refuses to overwrite a save changed externally since opening it; reopen the updated save instead.
 
 Start ETS2 and load the edited save. Steam Cloud synchronization remains Steam's responsibility.
 
 ## Update or uninstall
 
-Save your edits and stop the garage before updating. Extract the newer Windows ZIP into a new folder and run its EXE. Settings and caches remain in `%LOCALAPPDATA%\ETS2Garage`.
+Save your edits and stop the garage before updating. Extract the newer Windows ZIP into a new folder and run its EXE. Settings remain in `%LOCALAPPDATA%\ETS2Garage`. Imported data defaults to its `cache` subfolder. You can change **Cache folder** in **Folders**; the new folder is created if needed, and the cache rebuilds as you browse. Existing cache files remain in the old folder.
 
-To uninstall, stop the garage and delete its extracted folder. Optionally delete `%LOCALAPPDATA%\ETS2Garage` to remove settings and caches. ETS2 saves and backup folders are separate.
+To uninstall, stop the garage and delete its extracted folder. Optionally delete `%LOCALAPPDATA%\ETS2Garage` to remove settings and the default cache. If you selected another cache folder, delete it separately if desired. ETS2 saves and backup folders are separate.
 
 ## Restore a save backup
 
@@ -73,7 +73,7 @@ To uninstall, stop the garage and delete its extracted folder. Optionally delete
 | No profiles or saves | Check Settings and create a manual save in ETS2. Confirm the profiles folder matches the one the game uses. |
 | Blank 3D view | Check hardware acceleration and graphics drivers; try another WebGL-capable browser. |
 | Missing part | Confirm its DLC/mod is installed. Missing old-mod hookups are skipped during preview. |
-| Save refused | Close ETS2. If the save changed externally, reopen it and reapply your edits. |
+| Save refused | If the save changed externally, reopen it and reapply your edits. |
 | Edited save fails in game | Restore its backup and report the versions, changed part, and error message. |
 
 Help: **[GitHub issues](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/issues/new/choose)** or Discord **`seniors`**. Do not share private saves or unredacted logs publicly.

@@ -53,6 +53,6 @@ History lasts for the running server session. Stopping the app clears history an
 
 ## Save
 
-Close ETS2, click **Save changes**, then start ETS2 and load the edited save. A backup is created before writing. Keep an experimental manual save while trying unusual combinations.
+Click **Save changes**, then load the edited save in ETS2. A backup is created before writing. You can save with ETS2 open, but load the edited save before saving again in game to avoid overwriting your changes. Keep an experimental manual save while trying unusual combinations.
 
 To reverse a saved change after ending the session, **[restore a backup](INSTALLATION.md#restore-a-save-backup)**.

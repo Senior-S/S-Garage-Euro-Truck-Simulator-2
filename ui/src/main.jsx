@@ -41,7 +41,7 @@ function App() {
   const [error, setError] = React.useState(''), [notice, setNotice] = React.useState(''), [busy, setBusy] = React.useState(''), [mode, setMode] = React.useState('replace'), [sceneIssues, setSceneIssues] = React.useState([])
   const [category, setCategory] = React.useState('all'), [query, setQuery] = React.useState(''), [brand, setBrand] = React.useState('all'), [selected, setSelected] = React.useState(''), [chosenSlot, setChosenSlot] = React.useState('')
   const [mountPoint, setMountPoint] = React.useState(null), [selectedMarker, setSelectedMarker] = React.useState(null)
-  const [settings, setSettings] = React.useState(false), [gamePath, setGamePath] = React.useState(''), [profilesPath, setProfilesPath] = React.useState(''), [decryptorPath, setDecryptorPath] = React.useState(''), [toolPath, setToolPath] = React.useState('')
+  const [settings, setSettings] = React.useState(false), [gamePath, setGamePath] = React.useState(''), [profilesPath, setProfilesPath] = React.useState(''), [decryptorPath, setDecryptorPath] = React.useState(''), [toolPath, setToolPath] = React.useState(''), [cachePath, setCachePath] = React.useState('')
   const [catalogOpen, setCatalogOpen] = React.useState(true), [historyOpen, setHistoryOpen] = React.useState(false), [paints, setPaints] = React.useState([]), [paintsLoading, setPaintsLoading] = React.useState(false)
   const [lightMode, setLightMode] = React.useState('off'), [markerVisibility, setMarkerVisibility] = React.useState('all')
   const [showDuplicates, setShowDuplicates] = React.useState(() => localStorage.getItem('yard.showDuplicates') === 'true')
@@ -70,6 +70,7 @@ function App() {
     if (next.profilesPath) setProfilesPath(next.profilesPath)
     if (next.decryptorPath) setDecryptorPath(next.decryptorPath)
     if (next.toolPath) setToolPath(next.toolPath)
+    if (next.cachePath) setCachePath(next.cachePath)
     if (next.session) applyState(next.session)
     else applyState(null)
     setCatalogLoading(true)
@@ -189,7 +190,7 @@ function App() {
     })
   }
   const edit = body => { sceneCancel.current?.(); return run('Applying change', () => send('/api/edit', { ...revisionGuard(), truckId: state?.truck?.id, ...body })) }
-  const save = () => run('Writing save', async () => { const result = await send('/api/save', revisionGuard()); applyState(result.state); setNotice(`Saved. Backup: ${result.backupPath}`); return result.state })
+  const save = () => run('Writing save', async () => { setStatus(await api('/api/status')); const result = await send('/api/save', revisionGuard()); applyState(result.state); setNotice(`Saved. Backup: ${result.backupPath}`); return result.state })
   const history = (direction, steps = 1) => { sceneCancel.current?.(); return run(direction === 'undo' ? 'Undoing' : 'Redoing', () => send(`/api/${direction}`, { ...revisionGuard(), steps })) }
   React.useEffect(() => {
     const onKey = e => {
@@ -248,8 +249,8 @@ function App() {
   const saveConfig = () => {
     if (state?.dirty && !window.confirm('Changing folders will close the current save. Discard unsaved changes and continue?')) return
     return run('Checking folders', async () => {
-      const updated = await send('/api/config', { gamePath, profilesPath, decryptorPath, toolPath }); setStatus(updated); applyState(updated.session || null); clearModelCache(); setAssetVersion(value => value + 1)
-      setGamePath(updated.gamePath || gamePath); setProfilesPath(updated.profilesPath || profilesPath); setDecryptorPath(updated.decryptorPath || decryptorPath); setToolPath(updated.toolPath || toolPath)
+      const updated = await send('/api/config', { gamePath, profilesPath, decryptorPath, toolPath, cachePath }); setStatus(updated); applyState(updated.session || null); clearModelCache(); setAssetVersion(value => value + 1)
+      setGamePath(updated.gamePath || gamePath); setProfilesPath(updated.profilesPath || profilesPath); setDecryptorPath(updated.decryptorPath || decryptorPath); setToolPath(updated.toolPath || toolPath); setCachePath(updated.cachePath)
       setSettings(false); setNotice(updated.message || 'Folders updated')
       setCatalogLoading(true)
       try { const [list, defs] = await Promise.all([api('/api/saves'), api('/api/catalog')]); setSaves(list); setCatalog(defs) }
@@ -273,6 +274,7 @@ function App() {
       <button className="save-button" onClick={save} disabled={!state?.dirty || !!busy}><Save size={15}/><span>{busy === 'Writing save' ? 'Saving…' : 'Save changes'}</span>{state?.dirty && <i/>}</button>
     </header>
 
+    {status?.gameRunning && <div className="game-save-warning" role="status"><AlertTriangle size={17}/><span>ETS2 is running. You can save here, but the game may overwrite your edits. Load the edited save in ETS2 before saving again in game.</span></div>}
     <main className={`workspace ${catalogOpen ? '' : 'catalog-is-closed'}`}>
       <aside className="installed-panel">
         <div className="panel-heading"><div><div className="eyebrow">Garage</div><h1>Installed parts</h1></div><span className="count-pill">{state?.truck?.accessories?.length ?? '—'}</span></div>
@@ -327,7 +329,7 @@ function App() {
     {(error || notice) && <div role="status" className={`toast ${error ? 'toast-error' : ''}`}><span>{error || notice}</span><button onClick={() => { setError(''); setNotice('') }} aria-label="Dismiss message"><X size={15}/></button></div>}
     {historyOpen && <HistoryWindow state={state} busy={!!busy} history={history} onClose={() => setHistoryOpen(false)}/>}
     {guideOpen && <GettingStarted onClose={() => { localStorage.setItem('yard.guideSeen', 'true'); setGuideOpen(false) }} onFolders={() => { localStorage.setItem('yard.guideSeen', 'true'); setGuideOpen(false); setSettings(true) }}/>}
-    {settings && <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && setSettings(false)}><section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><div className="modal-top"><div><div className="eyebrow">LOCAL CONNECTION</div><h2 id="settings-title">Game folders</h2></div><button className="icon-button" onClick={() => setSettings(false)} aria-label="Close settings"><X size={17}/></button></div><p className="modal-copy">Point S Garage at your Euro Truck Simulator 2 install and profile directory. Your save stays on this PC.</p><label className="path-field"><span>GAME INSTALL DIRECTORY</span><input value={gamePath} onChange={e => setGamePath(e.target.value)} placeholder="C:\\Program Files (x86)\\Steam\\steamapps\\common\\Euro Truck Simulator 2"/></label><label className="path-field"><span>PROFILES DIRECTORY</span><input value={profilesPath} onChange={e => setProfilesPath(e.target.value)} placeholder="Documents\\Euro Truck Simulator 2\\profiles"/></label><label className="path-field"><span>CONVERTERPIX TOOL</span><input value={toolPath} onChange={e => setToolPath(e.target.value)} placeholder="Path to converter_pix.exe"/></label><label className="path-field"><span>DECRYPTOR TOOL (OPTIONAL)</span><input value={decryptorPath} onChange={e => setDecryptorPath(e.target.value)} placeholder="Path to a compatible save decryptor executable"/></label><div className="detected-path"><span className={`small-status-dot ${status?.ready ? '' : 'off'}`}/><span>{status?.message || status?.toolPath || status?.decryptorPath || 'Waiting for folder scan'}</span></div><div className="modal-actions"><button className="text-button" onClick={() => setSettings(false)}>CANCEL</button><button className="save-button" onClick={saveConfig} disabled={!!busy}><Check size={15}/> SCAN FOLDERS</button></div></section></div>}
+    {settings && <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && setSettings(false)}><section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><div className="modal-top"><div><div className="eyebrow">LOCAL CONNECTION</div><h2 id="settings-title">Game folders</h2></div><button className="icon-button" onClick={() => setSettings(false)} aria-label="Close settings"><X size={17}/></button></div><p className="modal-copy">Point S Garage at your Euro Truck Simulator 2 install and profile directory. Your save stays on this PC.</p><label className="path-field"><span>GAME INSTALL DIRECTORY</span><input value={gamePath} onChange={e => setGamePath(e.target.value)} placeholder="C:\\Program Files (x86)\\Steam\\steamapps\\common\\Euro Truck Simulator 2"/></label><label className="path-field"><span>PROFILES DIRECTORY</span><input value={profilesPath} onChange={e => setProfilesPath(e.target.value)} placeholder="Documents\\Euro Truck Simulator 2\\profiles"/></label><label className="path-field"><span>CACHE FOLDER</span><input value={cachePath} onChange={e => setCachePath(e.target.value)} placeholder="Folder for imported game data"/></label><p className="modal-copy">Imported models and textures are stored here. Changing this folder rebuilds the cache as you browse. Existing files stay in the old folder. Settings stay in AppData\Local\ETS2Garage.</p><label className="path-field"><span>CONVERTERPIX TOOL</span><input value={toolPath} onChange={e => setToolPath(e.target.value)} placeholder="Path to converter_pix.exe"/></label><label className="path-field"><span>DECRYPTOR TOOL (OPTIONAL)</span><input value={decryptorPath} onChange={e => setDecryptorPath(e.target.value)} placeholder="Path to a compatible save decryptor executable"/></label><div className="detected-path"><span className={`small-status-dot ${status?.ready ? '' : 'off'}`}/><span>{status?.message || status?.toolPath || status?.decryptorPath || 'Waiting for folder scan'}</span></div><div className="modal-actions"><button className="text-button" onClick={() => setSettings(false)}>CANCEL</button><button className="save-button" onClick={saveConfig} disabled={!!busy}><Check size={15}/> SCAN FOLDERS</button></div></section></div>}
   </div>
 }
 
@@ -342,7 +344,7 @@ function GettingStarted({ onClose, onFolders }) {
       <li><h3>Turn off Steam Cloud for your profile</h3><p>In ETS2's profile selection screen, select your profile, choose Edit, disable Use Steam Cloud and apply the change.</p><a href="https://www.youtube.com/watch?v=e2aYdREZX4M" target="_blank" rel="noreferrer">Watch the profile setup video <ChevronRight size={14}/></a><p className="guide-note">This video is for another tool, but explains the same local profile setup.</p></li>
       <li><h3>Create a separate manual save</h3><p>Load your profile in ETS2 and make a new manual save for your truck edits. Local profiles normally live in Documents\Euro Truck Simulator 2\profiles. If your saves are missing, check the profiles directory in Folders.</p></li>
       <li><h3>Refresh, choose a save and edit</h3><p>Click Refresh saves beside the save selector after making a new save in ETS2. Choose your profile and save, then select a truck. Undo and redo let you revise your edits.</p></li>
-      <li><h3>Save and load it in ETS2</h3><p>Close ETS2 before clicking Save changes. S Garage backs up the selected save before writing it. Start ETS2 and load that same save to see your truck in game.</p></li>
+      <li><h3>Save and load it in ETS2</h3><p>Click Save changes, then load that same save in ETS2 to see your truck in game. S Garage backs up the selected save before writing it. If ETS2 is running, load the edited save before saving again in game, or the game may overwrite your edits.</p></li>
     </ol>
     <div className="modal-actions"><button className="text-button" onClick={onFolders}>Check folders</button><button className="save-button" onClick={onClose}><Check size={15}/> Open garage</button></div>
   </dialog>

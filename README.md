@@ -61,8 +61,8 @@ See the **[installation guide](docs/INSTALLATION.md)** for updating and troubles
 1. In ETS2, make a separate manual save for experimenting, then open that save in S Garage.
 2. Choose your **Profile**, **Save file**, and **Truck**.
 3. Click a part or marker, then choose an accessory from the catalog. Use **Undo** if you change your mind.
-4. **Close ETS2 before clicking Save changes.** The app creates a backup before writing the selected save.
-5. Start ETS2 and load the edited save to inspect the result.
+4. Click **Save changes**. The app creates a backup before writing the selected save. If ETS2 is running, load the edited save before saving again in game; otherwise the game may overwrite your edits.
+5. Load the edited save in ETS2 to inspect the result.
 
 Closing the browser keeps the local server running. Stopping S Garage ends the editing session; save your edits first. Light and marker controls only affect the preview.
 
