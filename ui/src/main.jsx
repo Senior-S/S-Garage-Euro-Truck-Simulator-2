@@ -11,7 +11,7 @@ import '@fontsource/ibm-plex-sans/latin-700.css'
 import '@fontsource/ibm-plex-mono/latin-400.css'
 import '@fontsource/ibm-plex-mono/latin-500.css'
 import '@fontsource/ibm-plex-mono/latin-600.css'
-import { AlertTriangle, ArrowLeftRight, Check, ChevronDown, ChevronRight, CircleHelp, Clock3, Cloud, Cpu, Disc3, Eye, Filter, History, Layers3, Move3D, PanelLeftClose, Plus, RotateCcw, Save, Search, Settings2, SlidersHorizontal, Truck, Undo2, Redo2, RefreshCw, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeftRight, Check, ChevronDown, ChevronRight, CircleHelp, Clock3, Cloud, Cpu, Disc3, Eye, Filter, History, Layers3, Move3D, PanelLeftClose, Plus, RotateCcw, Save, Search, Settings2, SlidersHorizontal, Truck, Undo2, Redo2, RefreshCw, Container, X } from 'lucide-react'
 import GarageScene from './scene.jsx'
 import { paintHex, paintRgb } from './paint-color.js'
 import { AnimatedPartPreview, cachedThumbnail, cacheModel, cachedModel, clearModelCache, queuePreview, renderModelThumbnail } from './catalog-preview.jsx'
@@ -37,6 +37,7 @@ const dateLabel = value => value ? new Intl.DateTimeFormat(undefined, { dateStyl
 function App() {
   const [status, setStatus] = React.useState(null), [saves, setSaves] = React.useState([]), [state, setState] = React.useState(null), [catalog, setCatalog] = React.useState([]), [catalogLoading, setCatalogLoading] = React.useState(true)
   const [guideOpen, setGuideOpen] = React.useState(() => localStorage.getItem('yard.guideSeen') !== 'true')
+  const vehiclePicker = React.useRef(null)
   const [selectedProfile, setSelectedProfile] = React.useState(''), [selectedSaveId, setSelectedSaveId] = React.useState('')
   const [error, setError] = React.useState(''), [notice, setNotice] = React.useState(''), [busy, setBusy] = React.useState(''), [mode, setMode] = React.useState('replace'), [sceneIssues, setSceneIssues] = React.useState([])
   const [category, setCategory] = React.useState('all'), [query, setQuery] = React.useState(''), [brand, setBrand] = React.useState('all'), [selected, setSelected] = React.useState(''), [chosenSlot, setChosenSlot] = React.useState('')
@@ -57,7 +58,7 @@ function App() {
   const profileSaves = saves.filter(save => profileId(save) === selectedProfile).sort((a, b) => new Date(b.modified || b.created || 0) - new Date(a.modified || a.created || 0))
   const activeSave = saves.find(save => save.id === state?.saveId)
   const paintPart = state?.truck?.accessories?.find(part => part.category === 'paint_job')
-  const previewCab = state?.truck?.accessories?.find(part => part.category === 'cabin')
+  const previewCab = state?.truck?.accessories?.find(part => part.category === (state.truck.kind === 'trailer' ? 'body' : 'cabin'))
   const partLabel = part => paints.find(item => item.path === part.dataPath)?.name || catalog.find(item => item.path === part.dataPath)?.name || friendlyCategory(part.category || part.type)
 
   const applyState = React.useCallback(data => {
@@ -181,16 +182,23 @@ function App() {
   }
   const selectProfile = id => { setSelectedProfile(id); setSelectedSaveId('') }
   const selectTruck = id => {
+    vehiclePicker.current?.removeAttribute('open')
     sceneCancel.current?.(); truckSelectRequest.current?.abort()
     const controller = new AbortController(), sequence = ++truckSelectSequence.current
     truckSelectRequest.current = controller
-    return run('Switching truck', async () => {
+    return run('Switching vehicle', async () => {
       const next = await send('/api/select', { ...revisionGuard(), truckId: id }, { signal: controller.signal })
       return sequence === truckSelectSequence.current ? next : null
     })
   }
   const edit = body => { sceneCancel.current?.(); return run('Applying change', () => send('/api/edit', { ...revisionGuard(), truckId: state?.truck?.id, ...body })) }
-  const save = () => run('Writing save', async () => { setStatus(await api('/api/status')); const result = await send('/api/save', revisionGuard()); applyState(result.state); setNotice(`Saved. Backup: ${result.backupPath}`); return result.state })
+  const save = () => run('Writing save', async () => {
+    const currentStatus = await api('/api/status')
+    setStatus(currentStatus)
+    if (currentStatus.gameRunning && !window.confirm('ETS2 is running and may overwrite your edits. Load the edited save in ETS2 before saving again in game. Save changes anyway?')) return
+    const result = await send('/api/save', revisionGuard())
+    applyState(result.state); setNotice(`Saved. Backup: ${result.backupPath}`); return result.state
+  })
   const history = (direction, steps = 1) => { sceneCancel.current?.(); return run(direction === 'undo' ? 'Undoing' : 'Redoing', () => send(`/api/${direction}`, { ...revisionGuard(), steps })) }
   React.useEffect(() => {
     const onKey = e => {
@@ -218,13 +226,13 @@ function App() {
   }, [category, state?.truck?.brand, assetVersion])
   const matching = React.useMemo(() => (category === 'paint_job' ? paints : catalog).filter(item => {
     if (item.suitableFor?.length) {
-      const cabin = state?.truck?.accessories.find(part => part.category === 'cabin')
+      const cabin = previewCab
       const unit = catalog.find(entry => entry.path === cabin?.dataPath)?.unitId
       if (unit && !item.suitableFor.includes(unit)) return false
     }
     const isHookup = item.category?.toLowerCase() === 'hookup'
     return (chosenSlot || category === 'hookup' ? isHookup : !isHookup) && (chosenSlot || (category === 'all' || item.category === category) && (brand === 'all' || item.brand === brand)) && `${item.name} ${item.category} ${advanced ? `${item.brand} ${item.path} ${item.unitId}` : brandLabel(item.brand)}`.toLowerCase().includes(query.toLowerCase())
-  }), [catalog, paints, chosenSlot, category, brand, query, advanced, state?.truck?.accessories])
+  }), [catalog, paints, chosenSlot, category, brand, query, advanced, state?.truck?.accessories, previewCab])
   const filtered = React.useMemo(() => {
     if (showDuplicates) return matching
     const unique = new Map()
@@ -247,7 +255,7 @@ function App() {
     else if (mode === 'duplicate' && activePart) edit({ op: 'duplicate', accessoryId: activePart.id, dataPath: item.path })
   }
   const saveConfig = () => {
-    if (state?.dirty && !window.confirm('Changing folders will close the current save. Discard unsaved changes and continue?')) return
+    if (state?.dirty) { setError('Save your vehicle edits before changing folders.'); return }
     return run('Checking folders', async () => {
       const updated = await send('/api/config', { gamePath, profilesPath, decryptorPath, toolPath, cachePath }); setStatus(updated); applyState(updated.session || null); clearModelCache(); setAssetVersion(value => value + 1)
       setGamePath(updated.gamePath || gamePath); setProfilesPath(updated.profilesPath || profilesPath); setDecryptorPath(updated.decryptorPath || decryptorPath); setToolPath(updated.toolPath || toolPath); setCachePath(updated.cachePath)
@@ -257,6 +265,15 @@ function App() {
       finally { setCatalogLoading(false) }
       return null
     })
+  }
+
+  const closeSettings = () => {
+    const changed = Object.entries({ gamePath, profilesPath, decryptorPath, toolPath, cachePath }).some(([key, value]) => value.trim() !== (status?.[key] || ''))
+    if (changed) {
+      if (window.confirm('Save your folder changes before closing? Choose Cancel to keep editing.')) saveConfig()
+      return
+    }
+    setSettings(false)
   }
 
   return <div className="app-shell">
@@ -274,12 +291,17 @@ function App() {
       <button className="save-button" onClick={save} disabled={!state?.dirty || !!busy}><Save size={15}/><span>{busy === 'Writing save' ? 'Saving…' : 'Save changes'}</span>{state?.dirty && <i/>}</button>
     </header>
 
-    {status?.gameRunning && <div className="game-save-warning" role="status"><AlertTriangle size={17}/><span>ETS2 is running. You can save here, but the game may overwrite your edits. Load the edited save in ETS2 before saving again in game.</span></div>}
     <main className={`workspace ${catalogOpen ? '' : 'catalog-is-closed'}`}>
       <aside className="installed-panel">
         <div className="panel-heading"><div><div className="eyebrow">Garage</div><h1>Installed parts</h1></div><span className="count-pill">{state?.truck?.accessories?.length ?? '—'}</span></div>
-        {state?.trucks?.length > 0 && <label className="truck-switch"><Truck size={15}/><select aria-label="Select truck" value={state.truck?.id || ''} onChange={e => selectTruck(e.target.value)}>{state.trucks.map(t => <option value={t.id} key={t.id}>{t.name} · {t.plate}</option>)}</select><ChevronDown size={14}/></label>}
-        {state?.truck && <div className="truck-info"><span className="truck-badge"><Truck size={21}/></span><div><b>{state.truck.name}</b><small>{advanced && state.truck.brand ? `${state.truck.brand} · ` : ''}{state.truck.plate || 'Truck ready'}</small></div><span className="truck-angle">↗</span></div>}
+        {state?.trucks?.length > 0 && <details className="vehicle-picker" ref={vehiclePicker} key={state.sessionId} onKeyDown={event => { if (event.key === 'Escape') { event.currentTarget.removeAttribute('open'); event.currentTarget.querySelector('summary').focus() } }}>
+          <summary aria-label="Choose truck or trailer">{state.truck?.kind === 'trailer' ? <Container size={16}/> : <Truck size={16}/>}<span>{state.truck?.name}{state.truck?.section > 1 && ` · Section ${state.truck.section}`}{state.truck?.plate && ` · ${state.truck.plate}`}</span><ChevronDown size={14}/></summary>
+          <div className="vehicle-menu">
+            <details className="vehicle-group" open><summary><Truck size={15}/> Trucks <span>{state.trucks.length}</span></summary><div>{state.trucks.map(vehicle => <button key={vehicle.id} className={state.truck?.id === vehicle.id ? 'selected' : ''} aria-pressed={state.truck?.id === vehicle.id} disabled={!!busy} onClick={() => selectTruck(vehicle.id)}><span>{vehicle.name}</span><small>{vehicle.plate || 'Owned truck'}</small>{state.truck?.id === vehicle.id && <Check size={14}/>}</button>)}</div></details>
+            <details className="vehicle-group"><summary><Container size={15}/> Trailers <span>{state.trailers?.length ?? '?'}</span></summary><div>{state.trailers?.map(vehicle => <button key={vehicle.id} className={state.truck?.id === vehicle.id ? 'selected' : ''} aria-pressed={state.truck?.id === vehicle.id} disabled={!!busy} onClick={() => selectTruck(vehicle.id)}><span>{vehicle.name}{vehicle.section > 1 && ` · Section ${vehicle.section}`}</span><small>{vehicle.plate || 'Owned trailer'}</small>{state.truck?.id === vehicle.id && <Check size={14}/>}</button>)}{!state.trailers?.length && <p>{state.trailers ? 'No owned trailers in this save.' : 'Restart the local S Garage server to load trailers, then reload this page.'}</p>}</div></details>
+          </div>
+        </details>}
+        {state?.truck && <div className="truck-info"><span className="truck-badge">{state.truck.kind === 'trailer' ? <Container size={21}/> : <Truck size={21}/>}</span><div><b>{state.truck.name}</b><small>{advanced && state.truck.brand ? `${state.truck.brand} · ` : ''}{state.truck.plate || (state.truck.kind === 'trailer' ? 'Trailer ready' : 'Truck ready')}</small></div><span className="truck-angle">↗</span></div>}
         <div className="part-list-title"><span>Installed components</span><span>{state?.truck?.accessories?.length || 0}</span></div>
         <div className="part-list">{state?.truck?.accessories?.map((part, index) => <button className={`part-row ${activePart?.id === part.id ? 'selected' : ''}`} key={part.id} onClick={() => { setSelectedMarker(null); setSelected(part.id); setChosenSlot(''); setMountPoint(null); setMode('replace'); setBrand('all'); setQuery(''); setCategory(part.category || 'all') }}>
           <span className="part-icon">{part.category?.toLowerCase().includes('wheel') || part.category?.toLowerCase().includes('tyre') ? <Disc3 size={17}/> : part.category?.toLowerCase().includes('engine') ? <Cpu size={17}/> : <Layers3 size={17}/>}</span><span className="part-copy"><b>{partLabel(part)}</b><small>{friendlyCategory(part.category || part.type)}</small></span><ChevronRight size={14} className="part-arrow"/>
@@ -296,7 +318,7 @@ function App() {
       </aside>
 
       <section className="viewport-panel">
-        <div className="viewport-header"><div><span className="eyebrow">Truck model</span><h2>{state?.truck?.name || 'Truck inspection'}</h2>{advanced && state?.truck?.brand && <span className="truck-make">{state.truck.brand}</span>}</div><div className="preview-controls">{paintPart && <button className="paint-open" onClick={() => { setSelected(paintPart.id); setSelectedMarker(null); setChosenSlot(''); setMountPoint(null); setCategory('paint_job'); setBrand(state.truck.brand); setQuery(''); setCatalogOpen(true) }}>Paint</button>}<label>Lights<select aria-label="Preview lights" value={lightMode} onChange={event => setLightMode(event.target.value)}><option value="off">Off</option><option value="low">Low</option><option value="high">High</option></select></label><label>Markers<select aria-label="Marker visibility" value={markerVisibility} onChange={event => setMarkerVisibility(event.target.value)}><option value="all">All</option><option value="selected">Selected only</option><option value="hidden">Hidden</option></select></label></div></div>
+        <div className="viewport-header"><div><span className="eyebrow">{state?.truck?.kind === 'trailer' ? 'Trailer model' : 'Truck model'}</span><h2>{state?.truck?.name || 'Truck inspection'}</h2>{advanced && state?.truck?.brand && <span className="truck-make">{state.truck.brand}</span>}</div><div className="preview-controls">{paintPart && <button className="paint-open" onClick={() => { setSelected(paintPart.id); setSelectedMarker(null); setChosenSlot(''); setMountPoint(null); setCategory('paint_job'); setBrand(state.truck.brand); setQuery(''); setCatalogOpen(true) }}>Paint</button>}<label>Lights<select aria-label="Preview lights" value={lightMode} onChange={event => setLightMode(event.target.value)}><option value="off">Off</option><option value="low">Low</option><option value="high">High</option></select></label><label>Markers<select aria-label="Marker visibility" value={markerVisibility} onChange={event => setMarkerVisibility(event.target.value)}><option value="all">All</option><option value="selected">Selected only</option><option value="hidden">Hidden</option></select></label></div></div>
         <div className="scene-wrap">{state?.truck ? <GarageScene lightMode={lightMode} markerVisibility={markerVisibility} key={`${state.sessionId}:${state.truck.id}`} truckKey={`${state.sessionId}:${state.truck.id}`} sceneRevision={state.revision} sessionId={state.sessionId} truckId={state.truck.id} cancelRef={sceneCancel} selectedAccessoryId={activePart?.id} selectedMarker={selectedMarker} markerLabel={point => point.kind === 'hookup' ? `${friendlyCategory(state.truck.accessories.find(part => part.id === point.accessoryId)?.category)} / ${friendlySlot(point.name)}` : friendlyCategory(point.category || point.name)} onPick={point => {
           setSelectedMarker(point.kind ? point : null)
           const part = state.truck.accessories.find(item => item.id === point.accessoryId)
@@ -329,7 +351,7 @@ function App() {
     {(error || notice) && <div role="status" className={`toast ${error ? 'toast-error' : ''}`}><span>{error || notice}</span><button onClick={() => { setError(''); setNotice('') }} aria-label="Dismiss message"><X size={15}/></button></div>}
     {historyOpen && <HistoryWindow state={state} busy={!!busy} history={history} onClose={() => setHistoryOpen(false)}/>}
     {guideOpen && <GettingStarted onClose={() => { localStorage.setItem('yard.guideSeen', 'true'); setGuideOpen(false) }} onFolders={() => { localStorage.setItem('yard.guideSeen', 'true'); setGuideOpen(false); setSettings(true) }}/>}
-    {settings && <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && setSettings(false)}><section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><div className="modal-top"><div><div className="eyebrow">LOCAL CONNECTION</div><h2 id="settings-title">Game folders</h2></div><button className="icon-button" onClick={() => setSettings(false)} aria-label="Close settings"><X size={17}/></button></div><p className="modal-copy">Point S Garage at your Euro Truck Simulator 2 install and profile directory. Your save stays on this PC.</p><label className="path-field"><span>GAME INSTALL DIRECTORY</span><input value={gamePath} onChange={e => setGamePath(e.target.value)} placeholder="C:\\Program Files (x86)\\Steam\\steamapps\\common\\Euro Truck Simulator 2"/></label><label className="path-field"><span>PROFILES DIRECTORY</span><input value={profilesPath} onChange={e => setProfilesPath(e.target.value)} placeholder="Documents\\Euro Truck Simulator 2\\profiles"/></label><label className="path-field"><span>CACHE FOLDER</span><input value={cachePath} onChange={e => setCachePath(e.target.value)} placeholder="Folder for imported game data"/></label><p className="modal-copy">Imported models and textures are stored here. Changing this folder rebuilds the cache as you browse. Existing files stay in the old folder. Settings stay in AppData\Local\ETS2Garage.</p><label className="path-field"><span>CONVERTERPIX TOOL</span><input value={toolPath} onChange={e => setToolPath(e.target.value)} placeholder="Path to converter_pix.exe"/></label><label className="path-field"><span>DECRYPTOR TOOL (OPTIONAL)</span><input value={decryptorPath} onChange={e => setDecryptorPath(e.target.value)} placeholder="Path to a compatible save decryptor executable"/></label><div className="detected-path"><span className={`small-status-dot ${status?.ready ? '' : 'off'}`}/><span>{status?.message || status?.toolPath || status?.decryptorPath || 'Waiting for folder scan'}</span></div><div className="modal-actions"><button className="text-button" onClick={() => setSettings(false)}>CANCEL</button><button className="save-button" onClick={saveConfig} disabled={!!busy}><Check size={15}/> SCAN FOLDERS</button></div></section></div>}
+    {settings && <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && closeSettings()}><section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><div className="modal-top"><div><div className="eyebrow">LOCAL CONNECTION</div><h2 id="settings-title">Game folders</h2></div><button className="icon-button" onClick={closeSettings} aria-label="Close settings"><X size={17}/></button></div><p className="modal-copy">Point S Garage at your Euro Truck Simulator 2 install and profile directory. Your save stays on this PC. Click Save folders to keep changes for the next launch.</p><label className="path-field"><span>GAME INSTALL DIRECTORY</span><input value={gamePath} onChange={e => setGamePath(e.target.value)} placeholder="C:\\Program Files (x86)\\Steam\\steamapps\\common\\Euro Truck Simulator 2"/></label><label className="path-field"><span>PROFILES DIRECTORY</span><input value={profilesPath} onChange={e => setProfilesPath(e.target.value)} placeholder="Documents\\Euro Truck Simulator 2\\profiles"/></label><label className="path-field"><span>CACHE FOLDER</span><input value={cachePath} onChange={e => setCachePath(e.target.value)} placeholder="Folder for imported game data"/></label><p className="modal-copy">Imported models and textures are stored here. Changing this folder rebuilds the cache as you browse. Existing files stay in the old folder. Settings stay in AppData\Local\ETS2Garage.</p><label className="path-field"><span>CONVERTERPIX TOOL</span><input value={toolPath} onChange={e => setToolPath(e.target.value)} placeholder="Path to converter_pix.exe"/></label><label className="path-field"><span>DECRYPTOR TOOL (OPTIONAL)</span><input value={decryptorPath} onChange={e => setDecryptorPath(e.target.value)} placeholder="Path to a compatible save decryptor executable"/></label><div className="detected-path"><span className={`small-status-dot ${status?.ready ? '' : 'off'}`}/><span>{status?.message || status?.toolPath || status?.decryptorPath || 'Waiting for folder scan'}</span></div><div className="modal-actions"><button className="text-button" onClick={() => setSettings(false)}>CANCEL</button><button className="save-button" onClick={saveConfig} disabled={!!busy}><Check size={15}/> Save folders</button></div></section></div>}
   </div>
 }
 
@@ -343,7 +365,7 @@ function GettingStarted({ onClose, onFolders }) {
     <ol>
       <li><h3>Turn off Steam Cloud for your profile</h3><p>In ETS2's profile selection screen, select your profile, choose Edit, disable Use Steam Cloud and apply the change.</p><a href="https://www.youtube.com/watch?v=e2aYdREZX4M" target="_blank" rel="noreferrer">Watch the profile setup video <ChevronRight size={14}/></a><p className="guide-note">This video is for another tool, but explains the same local profile setup.</p></li>
       <li><h3>Create a separate manual save</h3><p>Load your profile in ETS2 and make a new manual save for your truck edits. Local profiles normally live in Documents\Euro Truck Simulator 2\profiles. If your saves are missing, check the profiles directory in Folders.</p></li>
-      <li><h3>Refresh, choose a save and edit</h3><p>Click Refresh saves beside the save selector after making a new save in ETS2. Choose your profile and save, then select a truck. Undo and redo let you revise your edits.</p></li>
+      <li><h3>Refresh, choose a save and edit</h3><p>Click Refresh saves beside the save selector after making a new save in ETS2. Choose your profile and save, then select a truck or expand Trailers in the vehicle picker. Undo and redo let you revise your edits.</p></li>
       <li><h3>Save and load it in ETS2</h3><p>Click Save changes, then load that same save in ETS2 to see your truck in game. S Garage backs up the selected save before writing it. If ETS2 is running, load the edited save before saving again in game, or the game may overwrite your edits.</p></li>
     </ol>
     <div className="modal-actions"><button className="text-button" onClick={onFolders}>Check folders</button><button className="save-button" onClick={onClose}><Check size={15}/> Open garage</button></div>
@@ -356,10 +378,10 @@ function HistoryWindow({ state, busy, history, onClose }) {
   const entries = state?.history || [], position = state?.historyPosition || 0
   return <dialog ref={dialog} className="history-window" onCancel={onClose} aria-labelledby="history-title">
     <div className="modal-top"><h2 id="history-title">Edit history</h2><button className="icon-button" aria-label="Close history" onClick={onClose}><X size={18}/></button></div>
-    <p>Changes across all trucks in this save, for the current session. Choose a change to undo it and every change after it.</p>
+    <p>Changes across all trucks and trailers in this save, for the current session. Choose a change to undo it and every change after it.</p>
     <div className="history-list"><button disabled={!position || busy} onClick={() => history('undo', position)}><span>Opened save</span><small>Undo all {position} changes</small></button>
       {entries.map((entry, index) => <button key={`${entry.time}:${index}`} className={index >= position ? 'history-undone' : ''} disabled={busy} onClick={() => history(index < position ? 'undo' : 'redo', index < position ? position - index : index - position + 1)}>
-        <span>{index + 1}. {entry.label}</span><small>{state.trucks.find(truck => truck.id === entry.truckId)?.name} · {new Date(entry.time).toLocaleTimeString()} · {index < position ? `Undo ${position - index}` : `Redo ${index - position + 1}`}</small>
+        <span>{index + 1}. {entry.label}</span><small>{[...state.trucks, ...(state.trailers || [])].find(truck => truck.id === entry.truckId)?.name} · {new Date(entry.time).toLocaleTimeString()} · {index < position ? `Undo ${position - index}` : `Redo ${index - position + 1}`}</small>
       </button>)}
     </div>{!entries.length && <p>No edits yet. Your changes will appear here.</p>}
     <div className="modal-actions"><button className="text-button" onClick={onClose}>Close</button></div>

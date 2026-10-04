@@ -56,3 +56,12 @@ History lasts for the running server session. Stopping the app clears history an
 Click **Save changes**, then load the edited save in ETS2. A backup is created before writing. You can save with ETS2 open, but load the edited save before saving again in game to avoid overwriting your changes. Keep an experimental manual save while trying unusual combinations.
 
 To reverse a saved change after ending the session, **[restore a backup](INSTALLATION.md#restore-a-save-backup)**.
+
+
+## Custom trailers
+
+Opening a save still selects the assigned truck. Open the vehicle dropdown below **Installed parts** to browse **Trucks** first, then expand **Trailers**. Only trailers owned by the profile appear. Linked sections of doubles and other combinations appear separately, with a section number; select each section to edit its accessories. Editing parts preserves the saved trailer chain.
+
+Trailers use the same part picker, 3D attachment markers, add/replace/copy controls, paint editor, advanced fields, undo/redo, history, and save backups. Trailer bodies mount on the chassis, and wheel parts retain their axle offsets. You can mix accessories across vehicles when their categories match. Compatibility and the final appearance still depend on ETS2 and the installed definitions.
+
+Save changes writes edits across all trucks and trailer sections in the session. The next time you open the save, the assigned truck is selected again. The expanded catalog requires a fresh asset import on the first launch of this version.

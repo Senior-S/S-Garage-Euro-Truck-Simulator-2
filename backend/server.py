@@ -232,8 +232,8 @@ class Handler(BaseHTTPRequestHandler):
                         result = garage.status()
                     elif parsed.path == "/api/select":
                         session = garage.require_session()
-                        if body["truckId"] not in session.truck_ids:
-                            raise ValueError("Truck not found in this save.")
+                        if body["truckId"] not in session.vehicle_ids:
+                            raise ValueError("Vehicle not found in this save.")
                         session.truck_id = body["truckId"]
                         result = session.state()
                     elif parsed.path == "/api/edit":

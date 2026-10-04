@@ -217,7 +217,7 @@ class AssetStore:
         return base_archives + self.mod_sources
 
     def _fingerprint(self) -> str:
-        digest = hashlib.sha256(b"ets-garage-assets-v1\n")
+        digest = hashlib.sha256(b"ets-garage-assets-v2\n")
         for archive in self._archives():
             stat = archive.stat()
             digest.update(f"{archive.resolve()}:{stat.st_size}:{stat.st_mtime_ns}\n".encode())
@@ -273,26 +273,23 @@ class AssetStore:
 
     def _read_catalog(self, root: Path) -> list[dict[str, Any]]:
         entries = []
-        defs_root = root / "def" / "vehicle" / "truck"
-        for file in sorted(defs_root.rglob("*.sii")):
-            relative = "/" + file.relative_to(root).as_posix()
-            definition = file.read_text(encoding="utf-8", errors="replace")
-            truck_match = re.search(r'^\s*accessory_truck_data\s*:\s*([^\s{]+)', definition, re.M)
-            if truck_match:
-                record = _properties(_blocks_after_record(definition, "accessory_truck_data", truck_match.group(1)))
-                entries.append(self._catalog_entry(relative, truck_match.group(1), "truck", file, record, "accessory_truck_data"))
-            else:
+        for family in ("truck", "trailer_owned"):
+            defs_root = root / "def" / "vehicle" / family
+            for file in sorted(defs_root.rglob("*.sii")):
+                relative = "/" + file.relative_to(root).as_posix()
+                definition = file.read_text(encoding="utf-8", errors="replace")
                 for record_type, unit, body in _records(definition):
                     if not record_type.startswith("accessory_") or not record_type.endswith("_data"):
                         continue
                     category = record_type.removeprefix("accessory_").removesuffix("_data")
-                    entries.append(self._catalog_entry(relative, unit, category, file, _properties(body)))
-        for directory in _WHEEL_DEF_DIRS:
-            for file in sorted((root / "def" / "vehicle" / directory).rglob("*.sii")):
-                relative = "/" + file.relative_to(root).as_posix()
-                for record_type, unit, body in _records(file.read_text(encoding="utf-8", errors="replace")):
-                    if record_type.startswith("accessory_") and record_type.endswith("_data"):
-                        entries.append(self._catalog_entry(relative, unit, directory, file, _properties(body), record_type))
+                    entries.append(self._catalog_entry(relative, unit, category, file, _properties(body), record_type))
+        for family in ("", "trailer_wheel"):
+            for directory in _WHEEL_DEF_DIRS:
+                for file in sorted((root / "def" / "vehicle" / family / directory).rglob("*.sii")):
+                    relative = "/" + file.relative_to(root).as_posix()
+                    for record_type, unit, body in _records(file.read_text(encoding="utf-8", errors="replace")):
+                        if record_type.startswith("accessory_") and record_type.endswith("_data"):
+                            entries.append(self._catalog_entry(relative, unit, directory, file, _properties(body), record_type))
         hookup_root = root / "def" / "vehicle" / "addon_hookups"
         for file in sorted([*hookup_root.rglob("*.sii"), *hookup_root.rglob("*.sui")]):
             relative = "/" + file.relative_to(root).as_posix()
@@ -304,9 +301,12 @@ class AssetStore:
     def _catalog_entry(path: str, unit: str, category: str, file: Path, fields: dict[str, list[str]], unit_type: str | None = None) -> dict[str, Any]:
         values = {key: items[-1] for key, items in fields.items() if items}
         parts = file.parts
-        truck_index = next((i for i, part in enumerate(parts) if part.casefold() == "truck"), -1)
+        truck_index = next((i for i, part in enumerate(parts) if part.casefold() in ("truck", "trailer_owned")), -1)
         brand = parts[truck_index + 1] if truck_index >= 0 and truck_index + 1 < len(parts) else ""
         path_parts = Path(path.split("#", 1)[0]).parts
+        vehicle_parts = path.lstrip("/").split("/")
+        if len(vehicle_parts) > 4 and vehicle_parts[2] in ("truck", "trailer_owned") and vehicle_parts[4] != "data.sii":
+            category = vehicle_parts[4]
         accessory_index = next((i for i, part in enumerate(path_parts) if part.casefold() == "accessory"), -1)
         if accessory_index >= 0 and accessory_index + 1 < len(path_parts):
             category = path_parts[accessory_index + 1]
@@ -348,6 +348,9 @@ class AssetStore:
         fields = entry.get("fields", {})
         source_path = entry.get("sourcePath") or entry["path"].split("#", 1)[0]
         path_parts = Path(source_path.lstrip("/")).parts
+        vehicle_parts = source_path.lstrip("/").split("/")
+        if len(vehicle_parts) > 4 and vehicle_parts[2] in ("truck", "trailer_owned") and vehicle_parts[4] != "data.sii":
+            entry["category"] = vehicle_parts[4]
         if "accessory" in path_parts:
             index = path_parts.index("accessory") + 1
             if index < len(path_parts):

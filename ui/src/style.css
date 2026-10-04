@@ -89,4 +89,20 @@ body,.app-shell{background:#141820;color:var(--text)}
 
 .settings-modal{max-height:calc(100vh - 32px);overflow:auto}
 
-.game-save-warning{display:flex;align-items:center;gap:10px;flex-shrink:0;padding:10px 16px;border-bottom:1px solid #82643e;background:#30291f;color:#f0c88e;font-size:12px;line-height:1.5}.game-save-warning svg{flex-shrink:0}
+
+.vehicle-picker{position:relative;margin:0 14px 12px;flex-shrink:0;z-index:9;color:#e2e7ee;background:#202630;border:1px solid #3d4653}
+.vehicle-picker summary{display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;padding:10px;font-size:12px}
+.vehicle-picker summary::-webkit-details-marker{display:none}
+.vehicle-picker>summary>span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vehicle-picker>summary>svg{flex-shrink:0}
+.vehicle-menu{position:absolute;top:100%;left:-1px;right:-1px;max-height:50vh;overflow:auto;background:#202630;border:1px solid #526278;box-shadow:0 12px 28px #0008}
+.vehicle-group+ .vehicle-group{border-top:1px solid #3d4653}
+.vehicle-group>summary{font-weight:600;color:#bac8dc}
+.vehicle-group>summary:after{content:'\203A';margin-left:4px;transform:rotate(0deg)}
+.vehicle-group[open]>summary:after{transform:rotate(90deg)}
+.vehicle-group summary>span{margin-left:auto;color:#9aa7b8;font-size:11px}
+.vehicle-group button{display:grid;grid-template-columns:1fr auto;gap:3px;width:100%;padding:9px 12px 9px 33px;border:0;background:transparent;text-align:left;color:#e2e7ee;cursor:pointer;font-size:12px}
+.vehicle-group button>small{grid-column:1;color:#a4afbd;font-size:10px}
+.vehicle-group button>svg{grid-column:2;grid-row:1/3;align-self:center}
+.vehicle-group button:hover:not(:disabled),.vehicle-group button.selected{background:#344154}
+.vehicle-group p{padding:4px 12px 12px;font-size:12px;color:#a4afbd;margin:0}

@@ -33,6 +33,25 @@ class MinimalAssets:
 
 
 class ServerTests(unittest.TestCase):
+    def test_owned_trailer_selection_edit_and_scene_over_http(self):
+        from test_trailers import TRAILER_SOURCE
+        self.path.write_text(TRAILER_SOURCE, encoding="utf-8")
+        code, state = self.request("/api/load", {"saveId": "profiles/54455354/quicksave"})
+        self.assertEqual(code, 200)
+        self.assertEqual(state["truck"]["id"], "_nameless.2")
+        code, selected = self.request("/api/select", {"truckId": "_nameless.10"})
+        self.assertEqual(code, 200)
+        self.assertEqual(selected["truck"]["kind"], "trailer")
+        code, edited = self.request("/api/edit", {"op": "duplicate", "accessoryId": "_nameless.14"})
+        self.assertEqual(code, 200)
+        self.assertEqual(len(edited["truck"]["accessories"]), 5)
+        self.assertEqual(self.request("/api/scene")[1]["truckId"], "_nameless.10")
+        code, selected = self.request("/api/select", {"truckId": "_nameless.11"})
+        self.assertEqual(code, 200)
+        self.assertEqual(selected["truck"]["section"], 2)
+        self.assertEqual(self.request("/api/select", {"truckId": "unowned"})[0], 400)
+        self.assertEqual(self.path.read_text(), TRAILER_SOURCE)
+
     def test_cache_folder_change_persists_and_preserves_old_cache(self):
         garage = self.http.garage
         old_cache = garage.assets.cache_path

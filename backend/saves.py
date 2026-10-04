@@ -38,8 +38,14 @@ def unquote(value: str) -> str:
 
 def category(path: str) -> str:
     parts = path.strip("/").split("/")
-    if len(parts) > 4 and parts[:3] == ["def", "vehicle", "truck"]:
-        return parts[5] if parts[4] == "accessory" and len(parts) > 5 else "truck" if parts[4] == "data.sii" else parts[4]
+    if len(parts) > 4 and parts[:2] == ["def", "vehicle"] and parts[2] in ("truck", "trailer_owned"):
+        if parts[4] == "accessory" and len(parts) > 5:
+            return parts[5]
+        if parts[4] == "data.sii":
+            return "truck" if parts[2] == "truck" else "trailer"
+        return parts[4]
+    if len(parts) > 3 and parts[:3] == ["def", "vehicle", "trailer_wheel"]:
+        return parts[3]
     if len(parts) > 2 and parts[:2] == ["def", "vehicle"]:
         return parts[2]
     return "unknown"
@@ -112,6 +118,22 @@ class SaveSession:
         self.truck_ids = refs(player, "trucks")
         if not self.truck_ids:
             raise ValueError("This save has no owned trucks.")
+        self.trailer_ids = refs(player, "trailers")
+        self.trailer_sections = {}
+        for owner_id in list(self.trailer_ids):
+            section_id = fields(self.units[owner_id][1]).get("slave_trailer", "null")
+            chain = {owner_id}
+            section = 2
+            while section_id != "null":
+                if section_id in chain or section_id not in self.units or self.units[section_id][0] != "trailer":
+                    raise ValueError("Invalid owned trailer chain.")
+                chain.add(section_id)
+                if section_id not in self.trailer_ids:
+                    self.trailer_ids.append(section_id)
+                self.trailer_sections[section_id] = section
+                section_id = fields(self.units[section_id][1]).get("slave_trailer", "null")
+                section += 1
+        self.vehicle_ids = self.truck_ids + self.trailer_ids
         player_fields = fields(player)
         assigned = player_fields.get("assigned_vehicles")
         current = fields(self.units[assigned][1]).get("vehicle") if assigned in self.units else player_fields.get("my_truck")
@@ -126,7 +148,7 @@ class SaveSession:
 
     def validate(self, changes: dict) -> None:
         # Validate owned accessory lists, including counts and paired hookup arrays.
-        for truck_id in self.truck_ids:
+        for truck_id in self.vehicle_ids:
             truck = self.block(truck_id, changes)
             ids = refs(truck, "accessories")
             if len(ids) != len(set(ids)):
@@ -145,9 +167,9 @@ class SaveSession:
                     raise ValueError(f"Attachment names and hookups differ on {accessory_id}.")
 
     def state(self) -> dict:
-        trucks = []
+        trucks, trailers = [], []
         active = None
-        for truck_id in self.truck_ids:
+        for truck_id in self.vehicle_ids:
             block = self.block(truck_id)
             data = fields(block)
             accessories = []
@@ -159,28 +181,30 @@ class SaveSession:
                                     "category": category(path), "fields": values,
                                     "slots": [{"name": unquote(n), "hookup": unquote(h)} for n, h in zip(refs(accessory, "slot_name"), refs(accessory, "slot_hookup"))]})
             cabin = next((a for a in accessories if a["category"] == "cabin"), None)
-            brand = cabin["dataPath"].split("/")[4] if cabin else "unknown"
+            kind = "trailer" if truck_id in self.trailer_ids else "truck"
+            base = next((a for a in accessories if a["dataPath"].startswith("/def/vehicle/trailer_owned/")), None) if kind == "trailer" else cabin
+            brand = base["dataPath"].split("/")[4] if base else "unknown"
             plate = re.sub(r"<[^>]+>", "", unquote(data.get("license_plate", '""')).split("|")[0]).strip().rstrip(".")
             truck = {"id": truck_id, "name": brand.replace(".", " ").replace("_", " ").title(),
-                     "brand": brand, "plate": plate, "accessoryCount": len(accessories), "selected": truck_id == self.truck_id}
-            trucks.append(truck)
+                     "kind": kind, "section": self.trailer_sections.get(truck_id, 1), "brand": brand, "plate": plate, "accessoryCount": len(accessories), "selected": truck_id == self.truck_id}
+            (trailers if kind == "trailer" else trucks).append(truck)
             if truck_id == self.truck_id:
                 active = {**truck, "accessories": accessories}
         return {"sessionId": self.session_id, "saveId": self.save_id, "saveName": self.name,
-                "trucks": trucks, "truck": active, "canUndo": bool(self.undo_stack), "canRedo": bool(self.redo_stack),
+                "trucks": trucks, "trailers": trailers, "truck": active, "canUndo": bool(self.undo_stack), "canRedo": bool(self.redo_stack),
                 "dirty": self.overrides != self.saved, "revision": self.revision,
                 "history": self.undo_entries + list(reversed(self.redo_entries)), "historyPosition": len(self.undo_entries)}
 
     def edit(self, request: dict, catalog: dict[str, dict]) -> dict:
         truck_id = request.get("truckId", self.truck_id)
-        if truck_id not in self.truck_ids:
-            raise ValueError("Choose an owned truck from this save.")
+        if truck_id not in self.vehicle_ids:
+            raise ValueError("Choose an owned truck or trailer from this save.")
         changes = dict(self.overrides)
         truck = self.block(truck_id)
         ids = refs(truck, "accessories")
         op, unit_id = request["op"], request.get("accessoryId")
         if op != "add" and unit_id not in ids:
-            raise ValueError("Choose an accessory from the selected truck.")
+            raise ValueError("Choose an accessory from the selected vehicle.")
         block = self.block(unit_id) if unit_id else ""
         new_id = "_nameless.e75." + uuid.uuid4().hex[:8] + ".0001"
         if op in ("replace", "fields", "hookup", "paint") and any(
@@ -194,7 +218,7 @@ class SaveSession:
             changes[truck_id] = set_array(truck, "accessories", ids)
         if op == "paint":
             if category(unquote(fields(block)["data_path"])) != "paint_job":
-                raise ValueError("Choose the truck's paint job before painting.")
+                raise ValueError("Choose the vehicle's paint job before painting.")
             path = request.get("dataPath") or unquote(fields(block)["data_path"])
             definition = catalog.get(path)
             if not definition or definition.get("category") != "paint_job":
@@ -242,7 +266,7 @@ class SaveSession:
                     if "slot_name" in fields(block):
                         block = set_array(set_array(block, "slot_name", []), "slot_hookup", [])
                 else:
-                    if kind in ("cabin", "chassis", "engine", "transmission", "interior", "head_light", "truck"):
+                    if kind in ("cabin", "chassis", "body", "engine", "transmission", "interior", "head_light", "truck", "trailer"):
                         accessory_type, extra = "vehicle_accessory", ""
                     elif kind == "paint_job" or kind.startswith(("f_", "r_")) and any(x in kind for x in ("tire", "disc", "hub", "nuts", "cover", "rim")):
                         raise ValueError("Add this part by duplicating an installed part of the same category, so its paint or axle fields are preserved.")
@@ -258,8 +282,8 @@ class SaveSession:
             changes[truck_id] = set_array(truck, "accessories", ids)
         elif op == "remove":
             kind = category(unquote(fields(block)["data_path"]))
-            if kind in ("cabin", "chassis", "engine", "transmission", "interior", "paint_job", "truck") and sum(category(unquote(fields(self.block(i))["data_path"])) == kind for i in ids) == 1:
-                raise ValueError(f"Keep at least one {kind.replace('_', ' ')} on the truck.")
+            if kind in ("cabin", "chassis", "body", "engine", "transmission", "interior", "paint_job", "truck", "trailer") and sum(category(unquote(fields(self.block(i))["data_path"])) == kind for i in ids) == 1:
+                raise ValueError(f"Keep at least one {kind.replace('_', ' ')} on the vehicle.")
             ids.remove(unit_id)
             changes[truck_id] = set_array(truck, "accessories", ids)
             # Keep shared units, but remove an unowned accessory completely.
