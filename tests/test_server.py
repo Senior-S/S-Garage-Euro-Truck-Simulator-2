@@ -40,8 +40,8 @@ class ServerTests(unittest.TestCase):
         (old_cache / "existing.txt").write_text("keep", encoding="utf-8")
         target = Path(self.temporary.name) / "custom" / "cache"
         with patch.object(server, "AssetStore", MinimalAssets), patch.object(server, "game_running", return_value=False):
-            code, result = self.request("/api/config", {"cachePath": str(target)})
-        self.assertEqual(code, 200)
+            code, result = self.request("/api/config", {"cachePath": str(target), "profilesPath": str(self.http.garage.profiles)})
+        self.assertEqual(code, 200, result)
         self.assertEqual(Path(result["cachePath"]), target)
         self.assertTrue(target.is_dir())
         self.assertEqual((old_cache / "existing.txt").read_text(), "keep")
@@ -53,9 +53,9 @@ class ServerTests(unittest.TestCase):
         target = Path(self.temporary.name) / "file.txt"
         target.write_text("occupied", encoding="utf-8")
         before = self.http.garage.assets
-        code, result = self.request("/api/config", {"cachePath": str(target)})
+        code, result = self.request("/api/config", {"cachePath": str(target), "profilesPath": str(self.http.garage.profiles)})
         self.assertEqual(code, 400)
-        self.assertIn("error", result)
+        self.assertEqual(result["error"], "Cache folder must be a directory.")
         self.assertIs(self.http.garage.assets, before)
         self.assertFalse(self.http.garage.config_file.exists())
 
