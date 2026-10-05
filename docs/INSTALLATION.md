@@ -4,7 +4,7 @@
 
 ## Requirements
 
-- Windows 10 or 11, 64-bit.
+- Windows 10 version 1903 or newer, or Windows 11, 64-bit.
 - Euro Truck Simulator 2 installed locally, with the DLC and mods your truck uses.
 - A browser with WebGL support, such as Edge, Chrome, or Firefox.
 - Free disk space for extracted asset caches, which grow as you explore parts.

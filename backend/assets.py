@@ -303,7 +303,7 @@ class AssetStore:
             return self._converter_features[1]
         features = {}
         try:
-            options = {"capture_output": True, "text": True, "timeout": 10,
+            options = {"capture_output": True, "text": True, "encoding": "utf-8", "errors": "replace", "timeout": 10,
                        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
             help_result = subprocess.run([str(self.tool_path), "--help"], **options)
             if help_result.returncode == 0 and "--garage-capabilities" in help_result.stdout:
@@ -341,7 +341,7 @@ class AssetStore:
             if features.get("garagePreview"):
                 arguments.append("--garage-preview")
         command = [str(self.tool_path), *(part for archive in archives for part in ("-b", str(archive))), *arguments]
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         deadline = time.monotonic() + timeout
         while True:

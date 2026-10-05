@@ -31,7 +31,7 @@ shutil.copy2(Path(sys.base_prefix) / "LICENSE.txt", licenses / "Python-LICENSE.t
 for file in (Path(sys.base_prefix) / "tcl").rglob("license.terms"):
     shutil.copy2(file, licenses / ("Tcl-Tk-" + file.parent.name + ".txt"))
 sources = [
-    ("ConverterPIX-SGarage", "Senior-S/ConverterPIX-SGarage", "ce70713952c93adafd651feb5b64e1078010b1d4"),
+    ("ConverterPIX-SGarage", "Senior-S/ConverterPIX-SGarage", "cfdbd60d5654881bb8eb7997fe228e53dc1acbe7"),
     ("SII-Decrypt", "TheLazyTomcat/SII_Decrypt", "683e1d8addc96947967148a29a07e0859736a926"),
 ]
 archives = []
