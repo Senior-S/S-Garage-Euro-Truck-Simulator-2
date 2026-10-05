@@ -11,7 +11,7 @@
 
 ### Known missing features and limitations
 
-- **v0.2.0 includes the paint editor and History window.** This remains a prerelease; keep backups and inspect edited trucks in ETS2.
+- **v0.3.0 adds owned trailer editing and faster asset imports with ConverterPIX-SGarage.** This remains a prerelease; keep backups and inspect edited trucks in ETS2.
 - Painting uses truck paint jobs and their supported color channels. Independent recoloring of arbitrary parts is not available, and metallic finishes only approximate the game's shaders.
 - Some parts, materials, lighting, and mod assets may render incorrectly or be missing from the preview.
 - Some accessory combinations may not work correctly in ETS2, even if they appear in the garage.
@@ -30,7 +30,7 @@ These are real captures of the app using locally installed game assets. The prev
 
 ## What you can do
 
-- Open a profile and save, then choose any owned truck.
+- Open a profile and save, then choose an owned truck or trailer, including trailer chain sections.
 - Inspect the truck in 3D, including its interior, and select parts or attachment markers.
 - Replace accessories, mix parts across trucks, and duplicate parts or hookups.
 - Browse visual catalog previews that rotate on hover; duplicates stay hidden unless enabled.
@@ -47,7 +47,7 @@ These are real captures of the app using locally installed game assets. The prev
 You need **Windows 10/11, 64-bit**, an installed copy of **Euro Truck Simulator 2**, and a browser with WebGL support. S Garage uses your installed game, DLC, and available mods. Game assets and saves are not included in the download.
 
 1. Open the **[Downloads page](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/releases)**. A GitHub account is not required.
-2. Under **Assets**, download **`S-Garage-v0.2.1-Windows-x64.zip`**. Choose this file instead of GitHub's automatically generated “Source code” downloads.
+2. Under **Assets**, download **`S-Garage-v0.3.0-Windows-x64.zip`**. Choose this file instead of GitHub's automatically generated “Source code” downloads.
 3. Right-click the ZIP and select **Extract All**. Keep the extracted files together.
 4. Open the extracted **S Garage** folder and double-click **`S Garage.exe`**.
 5. Your browser opens the garage. Keep the small S Garage window open while editing; use **Stop garage** when finished.

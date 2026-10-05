@@ -61,7 +61,7 @@ A separate resource bundle check matched 21 real chassis files totaling 15,292,6
 
 The garage suite covers bundled and loose catalog equality, Windows filename case handling, bundle-only paint settings/overrides, shared physics includes, native/PIM equivalence, batch cache reuse, per-job failures, cancellation, selected scene requests, and safe upstream capability probing. All 97 tests pass, including existing save, server, and scene regressions.
 
-The build retains upstream conversion warnings and the existing MSVCRT/static-runtime linker warning. Distributed fork releases still need a consistent dependency/runtime build and a pinned executable paired with its corresponding modified source archive. Current garage release inputs continue to use upstream.
+The build retains upstream conversion warnings and the existing MSVCRT/static-runtime linker warning. Distributed fork releases still need a consistent dependency/runtime build and a pinned executable paired with its corresponding modified source archive. Garage v0.3.0 release inputs pin the reviewed fork executable and its matching modified source archive.
 
 ## Reproduce
 
