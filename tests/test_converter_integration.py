@@ -14,7 +14,7 @@ from tests.test_scene import FakeAssets, build_scene
 
 class ConverterIntegrationTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(dir="E:/ETS2-Garage")
+        self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         capability_patch = patch.object(AssetStore, "_converter_capabilities", return_value={"batch": True, "definitionBundle": True, "viewerGeometry": True})
@@ -263,7 +263,7 @@ class ConverterIntegrationTests(unittest.TestCase):
 
 class ConverterCapabilityTests(unittest.TestCase):
     def test_upstream_probe_uses_help_and_caches_result(self):
-        with tempfile.TemporaryDirectory(dir="E:/ETS2-Garage") as temp:
+        with tempfile.TemporaryDirectory() as temp:
             executable = Path(temp) / "converter.exe"
             executable.write_bytes(b"stock")
             store = AssetStore(cache_path=Path(temp))
@@ -275,7 +275,7 @@ class ConverterCapabilityTests(unittest.TestCase):
                 self.assertEqual(run.call_args.args[0], [str(executable), "--help"])
 
     def test_fork_capabilities_refresh_when_executable_changes(self):
-        with tempfile.TemporaryDirectory(dir="E:/ETS2-Garage") as temp:
+        with tempfile.TemporaryDirectory() as temp:
             executable = Path(temp) / "converter.exe"
             executable.write_bytes(b"fork")
             store = AssetStore(cache_path=Path(temp))

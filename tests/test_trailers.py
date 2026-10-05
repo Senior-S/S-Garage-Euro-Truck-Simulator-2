@@ -134,8 +134,8 @@ class TrailerTests(unittest.TestCase):
             {"name": "wheel_r_1", **IDENTITY, "position": [.8, .5, 4]},
         ]}
         addon_model = {**model, "locators": [{"name": "slot_0", **IDENTITY, "position": [0, .2, 0]}]}
-        store = AssetStore(cache_path=Path(self.temporary.name))
-        with patch.object(store, "catalog", return_value=entries), patch.object(store, "model", side_effect=lambda path: chassis_model if "chassis/" in path else addon_model if "r_grill/" in path else model):
+        store = AssetStore(game_path=self.temporary.name, cache_path=Path(self.temporary.name))
+        with patch.object(store, "prepare_models"), patch.object(store, "catalog", return_value=entries), patch.object(store, "model", side_effect=lambda path: chassis_model if "chassis/" in path else addon_model if "r_grill/" in path else model):
             scene = build_scene(vehicle, store)
             self.assertEqual(scene["issues"], [])
             body = next(p for p in scene["parts"] if p["category"] == "body")

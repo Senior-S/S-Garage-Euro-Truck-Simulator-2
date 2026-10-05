@@ -11,7 +11,7 @@ from backend.converter_formats import DefinitionBundle, DEFINITION_BUNDLE_MAGIC,
 
 class ConverterFormatTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(dir="E:/ETS2-Garage")
+        self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
 

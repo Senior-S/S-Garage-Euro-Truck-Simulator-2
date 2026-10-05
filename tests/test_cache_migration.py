@@ -8,7 +8,7 @@ from backend.assets import AssetStore
 
 class CacheMigrationTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(dir="E:/ETS2-Garage")
+        self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.store = AssetStore(str(self.root), self.root / "cache")
