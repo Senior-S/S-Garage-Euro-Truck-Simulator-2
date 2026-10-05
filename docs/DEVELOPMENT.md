@@ -10,7 +10,7 @@ For portable Windows downloads, see [Installation](INSTALLATION.md). These notes
 
 Double-click **Start Garage.cmd** in this folder. It starts the Python server in the background and opens `http://127.0.0.1:8765`. **Stop Garage.cmd** stops that server. Closing the browser keeps the server and editing session available until you stop it. Save your changes before stopping the server. Browser windows share one editing session; stale windows must reload before editing.
 
-Requirements for a source checkout are Windows x64, Python 3.10 or newer, and Node.js 20 or newer for the first UI build. The launcher installs Pillow, builds the UI if necessary, and downloads pinned ConverterPIX and SII Decrypt binaries if they are missing. A checksum check verifies each download. Once the UI, fonts, and tools are installed, the app runs locally without fetching web assets.
+Requirements for a source checkout are Windows x64, Python 3.10 or newer, and Node.js 20 or newer for the first UI build. The launcher installs Pillow, builds the UI if necessary, and downloads pinned ConverterPIX-SGarage and SII Decrypt binaries if missing. SHA-256 checks verify existing and newly installed tools. Once the UI, fonts, and tools are installed, the app runs locally without fetching web assets.
 
 Steam's registry entries and `libraryfolders.vdf` locate the game, including libraries on other drives. Windows' Documents location finds the profiles. Settings accepts overrides for the game folder, profiles folder, converter, and decryptor. The app also checks `steam_profiles` alongside `profiles`.
 
@@ -27,6 +27,8 @@ Catalog cards render a larger 3D reference and rotate the model through a full t
 Catalog thumbnails are cached locally in the browser, up to 512 images. Returning to a category or reopening the app reuses those images without importing geometry or rendering another thumbnail. Game/mod source changes and importer updates invalidate the cache. Only visible cards load; leaving the visible area cancels their queued requests, and hover requests take priority. Thumbnail generation shares one WebGL context, with at most two import jobs active. Hover rotation and the garage retain the full-detail models. First-time imports still need the local asset conversion.
 
 The catalog hides equivalent definitions by default, including copies made for different truck brands. Appearance and functional fields must match; only price and unlock level are ignored. Within the current filters, the fitted definition or selected truck's brand is preferred. Check **Show duplicates** to display every matching definition. This preference is remembered locally, and all definitions remain available for loading saves.
+
+The initial UI opens before importing game definitions. Choosing a save resolves its active mods, then imports its catalog and vehicle preview. An inline loading panel shows stages, elapsed time, and completed counts where available, including inside the first-visit guide. Catalog previews pause while the vehicle loads. The 3D viewer and preview renderer load on demand. See [the loading review and benchmarks](LOADING_PERFORMANCE.md).
 
 Selecting a marker highlights that marker in amber and clears the whole-part highlight. Selecting a fitted part restores its highlight and clears the marker selection. The marker's owner remains available in the attachment editor.
 
@@ -89,6 +91,23 @@ Catalog scene-building and disposal helpers are shared by static thumbnails and 
 
 ## Tool sources
 
-- [ConverterPIX](https://github.com/mwl4/ConverterPIX), pinned to `3cd4e73a86d0c6bd28e117664c50a36cabeccf38`, converts PMG/PMD resources to PIM/PIT. Its LGPL license is in `tools/ConverterPIX-LICENSE.txt`.
+The bundled [ConverterPIX-SGarage fork](https://github.com/Senior-S/ConverterPIX-SGarage) adds definition bundles, binary viewer geometry, model batches, and a preview mode that skips unused collision and prefab exports. To rebuild it for development:
+
+```powershell
+# Clone beside this repository if it is not already present.
+git clone https://github.com/Senior-S/ConverterPIX-SGarage.git ../ConverterPIX-SGarage
+./scripts/build-converter-fork.ps1
+./launch.ps1
+```
+
+The build helper selects the fork through `ETS_GARAGE_CONVERTER` for the current terminal. It defaults to the Visual Studio 2026 `v145` toolset; pass `-PlatformToolset v143` for Visual Studio 2022, or `-MSBuildPath` and `-ConverterSource` for custom locations. An already running garage needs to be stopped and reopened to use the terminal override. If Settings already specifies a converter, select the fork executable there, since that saved choice takes precedence over the terminal override. Settings persists the choice.
+
+The backend checks the converter's capabilities once per executable revision. A supported fork uses one `definitions.sgbundle` for catalog import and lazy include reads, `.sgm` metadata plus `.sgb` arrays for new model exports, and one conversion batch for uncached fitted models and referenced hookups. Model jobs remain serial within the batch. Existing catalog JSON, complete PIM exports, and parsed model caches remain readable. An interrupted or failed batch retains incomplete markers and reports each failed model without discarding successful jobs.
+
+Materials, looks, and variants still use the small PIT exports. Both geometry paths share the same material and attachment logic and the same viewer response format. Format readers live in `backend/converter_formats.py`; the fork's `docs/GARAGE_MODES.md` and `docs/VIEWER_FORMAT.md` describe the file contracts. See [converter validation and measurements](CONVERTER_FORK.md).
+
+Setup and release packaging pin the fork executable and its matching modified source archive to `ce70713952c93adafd651feb5b64e1078010b1d4`.
+
+- [ConverterPIX-SGarage](https://github.com/Senior-S/ConverterPIX-SGarage), pinned to `ce70713952c93adafd651feb5b64e1078010b1d4`, converts PMG/PMD resources to native viewer geometry and PIM/PIT. Its LGPL license is in `tools/ConverterPIX-LICENSE.txt`.
 - [SII Decrypt](https://github.com/TheLazyTomcat/SII_Decrypt), binary branch pinned to `683e1d8addc96947967148a29a07e0859736a926`, decrypts temporary save copies. Its MPL license is in `tools/SII-Decrypt-LICENSE.txt`.
 - [SCS format documentation](https://modding.scssoft.com/wiki/Documentation/Engine/Formats) and [archive tools](https://modding.scssoft.com/wiki/Documentation/Tools/Game_Archive_Extractor) describe the game's asset formats.

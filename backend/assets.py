@@ -9,6 +9,7 @@ import math
 import os
 import re
 import shutil
+import stat
 import struct
 import subprocess
 import sys
@@ -18,6 +19,11 @@ import time
 from concurrent.futures import CancelledError
 from pathlib import Path
 from typing import Any
+
+if __package__:
+    from .converter_formats import DefinitionBundle, read_viewer_model
+else:
+    from converter_formats import DefinitionBundle, read_viewer_model
 
 try:
     import winreg
@@ -34,6 +40,8 @@ _IMPORT_LOCK = threading.RLock()
 _FLOAT = re.compile(r"&([0-9a-fA-F]{8})|[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?")
 _FIELD = re.compile(r'^\s*([\w\[\].]+)\s*:\s*(.*?)\s*$')
 _BLOCK = re.compile(r'([\w]+)\s*\{')
+_STRUCTURE = re.compile(r'\\.|["{}]')
+_BRACES = re.compile(r'[{}]')
 _WHEEL_DEF_DIRS = ("f_tire", "r_tire", "f_disc", "r_disc", "f_hub", "r_hub", "f_nuts", "r_nuts", "f_cover", "r_cover", "f_rim", "r_rim")
 
 
@@ -56,10 +64,10 @@ def _blocks(text: str, kind: str) -> list[str]:
         start = match.end()
         depth = 1
         quoted = False
-        escaped = False
-        for index in range(start, len(text)):
-            char = text[index]
-            if char == '"' and not escaped:
+        # Numeric mesh streams contain millions of characters but few delimiters.
+        for token in _STRUCTURE.finditer(text, start):
+            char = token[0][-1]
+            if char == '"' and len(token[0]) == 1:
                 quoted = not quoted
             if not quoted:
                 if char == '{':
@@ -67,11 +75,8 @@ def _blocks(text: str, kind: str) -> list[str]:
                 elif char == '}':
                     depth -= 1
                     if depth == 0:
-                        bodies.append(text[start:index])
+                        bodies.append(text[start:token.end() - 1])
                         break
-            escaped = char == '\\' and not escaped
-            if char != '\\':
-                escaped = False
     return bodies
 
 
@@ -161,12 +166,20 @@ class AssetStore:
         local_app_data = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
         self.cache_path = Path(cache_path).expanduser() if cache_path else Path(os.environ.get("ETS2_CACHE_PATH", local_app_data / "ETS2Garage" / "cache"))
         self.lock = _IMPORT_LOCK
-        self._parser_fingerprint = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+        self._parser_fingerprint = hashlib.sha256(Path(__file__).read_bytes() + b"\0" +
+                                                 Path(__file__).with_name("converter_formats.py").read_bytes()).hexdigest()
         self.mod_sources: list[Path] = []
         self._mod_fingerprint = ""
         self._catalog: list[dict[str, Any]] | None = None
         self._model_cache: dict[str, str] = {}
         self.texture_files: dict[str, Path] = {}
+        self.progress = None
+        self._definitions = {}
+        self._definition_catalog = None
+        self._bundles = {}
+        self._converter_features = None
+        self._batch_failures = {}
+        self._cache_migration_required = None
 
     def set_mod_sources(self, sources: list[str | Path]) -> None:
         """Set the active profile's explicitly selected mod archives/directories, in load order."""
@@ -182,16 +195,27 @@ class AssetStore:
             if self.mod_sources:
                 digest = hashlib.sha256()
                 for source in self.mod_sources:
-                    files = sorted(source.rglob("*") if source.is_dir() else [source])
+                    directory = source.is_dir()
+                    files = sorted(source.rglob("*") if directory else [source])
                     digest.update(f"{source.resolve()}\n".encode())
-                    for file in files:
-                        if file.is_file():
-                            stat = file.stat()
-                            digest.update(f"{file.relative_to(source) if source.is_dir() else file.name}:{stat.st_size}:{stat.st_mtime_ns}\n".encode())
+                    for index, file in enumerate(files):
+                        if self.progress and index % 64 == 0:
+                            self.progress("Checking mod files", source.name, index, len(files))
+                        try:
+                            metadata = file.stat()
+                        except FileNotFoundError:
+                            # Match is_file() for removed files or broken links.
+                            continue
+                        if stat.S_ISREG(metadata.st_mode):
+                            digest.update(f"{file.relative_to(source) if directory else file.name}:{metadata.st_size}:{metadata.st_mtime_ns}\n".encode())
                 self._mod_fingerprint = digest.hexdigest()
             self._catalog = None
+            self._definitions.clear()
+            self._definition_catalog = None
             self._model_cache.clear()
             self.texture_files.clear()
+            self._bundles.clear()
+            self._batch_failures.clear()
 
     def status(self) -> dict[str, Any]:
         archives = self._archives() if self.game_path and self.game_path.is_dir() else []
@@ -210,7 +234,51 @@ class AssetStore:
             "ready": ready,
             "toolPath": str(self.tool_path),
             "message": message,
+            "cacheMigrationRequired": self.cache_migration_required() if ready else False,
         }
+
+    def cache_migration_required(self) -> bool:
+        """Detect legacy exports once before status or catalog loading can reuse them."""
+        if self._cache_migration_required is not None:
+            return self._cache_migration_required
+        features = self._converter_capabilities()
+        if not features.get("definitionBundle") or not features.get("viewerGeometry"):
+            return False
+        catalogs = self.cache_path / "catalog"
+        legacy_catalog = catalogs.is_dir() and any(
+            folder.is_dir() and not (folder / "definitions.sgbundle").is_file() and any(folder.iterdir())
+            for folder in catalogs.iterdir())
+        models = self.cache_path / "models"
+        self._cache_migration_required = bool(legacy_catalog or models.is_dir() and next(models.rglob("*.pim"), None))
+        return self._cache_migration_required
+
+    def rebuild_cache(self) -> None:
+        """Remove only owned asset cache trees after the application obtains acceptance."""
+        with _IMPORT_LOCK:
+            if not self.cache_migration_required():
+                return
+            root = self.cache_path.resolve()
+            targets = [root / name for name in ("catalog", "models")]
+            # Validate every target before removing any files, including redirected folders.
+            for target in targets:
+                if target.resolve().parent != root or target.is_symlink() or getattr(target, "is_junction", lambda: False)():
+                    raise ValueError(f"Asset cache folder is redirected outside its expected location: {target}")
+                if target.exists() and not target.is_dir():
+                    raise ValueError(f"Asset cache folder is not a directory: {target}")
+            if self.progress:
+                self.progress("Clearing old asset cache", "Removing imported definitions, models, and textures.")
+            for target in targets:
+                if target.exists():
+                    shutil.rmtree(target)
+            self._catalog = None
+            self._definition_catalog = None
+            self._definitions.clear()
+            self._model_cache.clear()
+            self.texture_files.clear()
+            self._bundles.clear()
+            self._batch_failures.clear()
+            self.__dict__.pop("_paint_jobs", None)
+            self._cache_migration_required = False
 
     def _archives(self) -> list[Path]:
         base_archives = sorted(self.game_path.glob("*.scs"), key=lambda path: path.name.casefold()) if self.game_path else []
@@ -224,11 +292,55 @@ class AssetStore:
         digest.update(self._mod_fingerprint.encode())
         return digest.hexdigest()
 
-    def _run(self, arguments: list[str], timeout: int = 300, cancelled=None) -> str:
-        status = self.status()
-        if not status["ready"]:
-            raise RuntimeError(status["message"])
-        command = [str(self.tool_path), *(part for archive in self._archives() for part in ("-b", str(archive))), *arguments]
+    def _converter_capabilities(self) -> dict:
+        """Probe once per executable revision, keeping upstream tools usable."""
+        try:
+            metadata = self.tool_path.stat()
+        except OSError:
+            return {}
+        revision = (str(self.tool_path.resolve()), metadata.st_size, metadata.st_mtime_ns)
+        if self._converter_features is not None and self._converter_features[0] == revision:
+            return self._converter_features[1]
+        features = {}
+        try:
+            options = {"capture_output": True, "text": True, "timeout": 10,
+                       "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+            help_result = subprocess.run([str(self.tool_path), "--help"], **options)
+            if help_result.returncode == 0 and "--garage-capabilities" in help_result.stdout:
+                result = subprocess.run([str(self.tool_path), "--garage-capabilities"], **options)
+            else:
+                result = help_result
+            if result.returncode == 0 and "--garage-capabilities" in help_result.stdout:
+                for line in result.stdout.splitlines():
+                    if not line.startswith("{"):
+                        continue
+                    candidate = json.loads(line)
+                    if isinstance(candidate, dict) and candidate.get("garageFormatVersion") == 1:
+                        features = candidate
+                        break
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
+        self._converter_features = revision, features
+        return features
+
+    def _run(self, arguments: list[str], timeout: int = 300, cancelled=None, *, partial_batch=False) -> str:
+        archives = self._archives()
+        if not self.game_path or not self.game_path.is_dir() or not archives or not self.tool_path.is_file():
+            raise RuntimeError(self.status()["message"])
+        features = self._converter_capabilities()
+        arguments = list(arguments)
+        if features.get("definitionBundle") and "--extract-directory" in arguments:
+            index = arguments.index("--extract-directory")
+            if arguments[index + 1] == "/def/vehicle":
+                arguments[index] = "--extract-bundle"
+                target = arguments.index("-e") + 1
+                arguments[target] = str(Path(arguments[target]) / "definitions.sgbundle")
+        if "-m" in arguments or "--batch" in arguments:
+            if features.get("viewerGeometry"):
+                arguments.append("--viewer-geometry")
+            if features.get("garagePreview"):
+                arguments.append("--garage-preview")
+        command = [str(self.tool_path), *(part for archive in archives for part in ("-b", str(archive))), *arguments]
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         deadline = time.monotonic() + timeout
@@ -248,53 +360,124 @@ class AssetStore:
             except subprocess.TimeoutExpired:
                 continue
         output = (stdout + "\n" + stderr).strip()
-        if process.returncode or re.search(r"(?:^|\s)(?:ERROR|FATAL)(?:\s|:)|<error>\s*\d*", output, re.I):
+        if not partial_batch and (process.returncode or re.search(r"(?:^|\s)(?:ERROR|FATAL)(?:\s|:)|<error>\s*\d*", output, re.I)):
             raise RuntimeError(f"ConverterPIX failed ({process.returncode}): {output[-3000:]}")
         return output
 
     def ensure_catalog(self) -> list[dict[str, Any]]:
+        if self.cache_migration_required():
+            raise ValueError("The asset cache format changed. Accept the cache rebuild notice to continue.")
         if self._catalog is not None:
             return self._catalog
+        if self.progress:
+            self.progress("Waiting for game assets", "Another import may be using the disk.")
         with _IMPORT_LOCK:
+            # Another request can finish the import while this one waits.
+            if self._catalog is not None:
+                return self._catalog
             fingerprint = self._fingerprint()
             root = self.cache_path / "catalog" / fingerprint
             index_path = root / "catalog.json"
             if index_path.is_file():
-                self._catalog = [self._enrich_catalog_entry(entry) for entry in json.loads(index_path.read_text(encoding="utf-8"))]
-                return self._catalog
+                if self.progress:
+                    self.progress("Reading cached catalog", "Reusing imported game definitions.")
+                try:
+                    cached = json.loads(index_path.read_text(encoding="utf-8"))
+                    if not isinstance(cached, list) or any(not isinstance(entry, dict) for entry in cached):
+                        raise ValueError("Invalid catalog cache.")
+                    self._catalog = [self._enrich_catalog_entry(entry) for entry in cached]
+                    return self._catalog
+                except (ValueError, TypeError, KeyError):
+                    # A partial cache from an interrupted older import is rebuilt.
+                    pass
             root.mkdir(parents=True, exist_ok=True)
+            if self.progress:
+                self.progress("Importing game definitions", "First import can take several minutes on a hard disk. Keep the garage open.")
             self._run(["-e", str(root), "--extract-directory", "/def/vehicle"], timeout=900)
-            self._catalog = [self._enrich_catalog_entry(entry) for entry in self._read_catalog(root)]
-            index_path.write_text(json.dumps(self._catalog, ensure_ascii=False), encoding="utf-8")
+            catalog = [self._enrich_catalog_entry(entry) for entry in self._read_catalog(root)]
+            if self.progress:
+                self.progress("Saving catalog cache", f"{len(catalog):,} parts indexed. Later launches reuse this cache.")
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=root, suffix=".tmp", delete=False) as temporary:
+                json.dump(catalog, temporary, ensure_ascii=False, separators=(",", ":"))
+            try:
+                os.replace(temporary.name, index_path)
+            except OSError as error:
+                if getattr(error, "winerror", None) != 17:
+                    raise
+                index_path.write_text(Path(temporary.name).read_text("utf-8"), encoding="utf-8")
+            finally:
+                Path(temporary.name).unlink(missing_ok=True)
+            self._catalog = catalog
             return self._catalog
 
     def catalog(self) -> list[dict[str, Any]]:
         return self.ensure_catalog()
 
+    def _definition_bundle(self, root: Path):
+        path = root / "definitions.sgbundle"
+        if not path.is_file():
+            return None
+        metadata = path.stat()
+        revision = metadata.st_size, metadata.st_mtime_ns
+        cached = self._bundles.get(root)
+        if cached is None or cached[0] != revision:
+            cached = revision, DefinitionBundle(path)
+            self._bundles[root] = cached
+        return cached[1]
+
+    def _definition_text(self, file: Path, root: Path, cancelled=None) -> str:
+        if cancelled and cancelled():
+            raise CancelledError()
+        file, root = Path(os.path.abspath(file)), Path(os.path.abspath(root))
+        if not file.is_relative_to(root):
+            raise ValueError(f"Definition include is outside the catalog: {file}")
+        virtual_path = "/" + file.relative_to(root).as_posix()
+        bundle = self._definition_bundle(root)
+        if bundle is not None and virtual_path in bundle:
+            return bundle.read_text(virtual_path)
+        if not file.is_file():
+            file.parent.mkdir(parents=True, exist_ok=True)
+            self._run(["-e", str(root), "--extract-file", virtual_path], cancelled=cancelled)
+        return file.read_text(encoding="utf-8", errors="replace")
+
     def _read_catalog(self, root: Path) -> list[dict[str, Any]]:
         entries = []
+        groups = []
+        bundle = self._definition_bundle(root)
         for family in ("truck", "trailer_owned"):
             defs_root = root / "def" / "vehicle" / family
-            for file in sorted(defs_root.rglob("*.sii")):
-                relative = "/" + file.relative_to(root).as_posix()
-                definition = file.read_text(encoding="utf-8", errors="replace")
-                for record_type, unit, body in _records(definition):
-                    if not record_type.startswith("accessory_") or not record_type.endswith("_data"):
-                        continue
-                    category = record_type.removeprefix("accessory_").removesuffix("_data")
-                    entries.append(self._catalog_entry(relative, unit, category, file, _properties(body), record_type))
+            paths = (root / path.lstrip("/") for path in bundle.paths
+                     if path.casefold().startswith(f"/def/vehicle/{family}/") and path.casefold().endswith(".sii")) if bundle else defs_root.rglob("*.sii")
+            groups.append((None, sorted(paths)))
         for family in ("", "trailer_wheel"):
             for directory in _WHEEL_DEF_DIRS:
-                for file in sorted((root / "def" / "vehicle" / family / directory).rglob("*.sii")):
-                    relative = "/" + file.relative_to(root).as_posix()
-                    for record_type, unit, body in _records(file.read_text(encoding="utf-8", errors="replace")):
-                        if record_type.startswith("accessory_") and record_type.endswith("_data"):
-                            entries.append(self._catalog_entry(relative, unit, directory, file, _properties(body), record_type))
+                defs_root = root / "def" / "vehicle" / family / directory
+                prefix = "/" + defs_root.relative_to(root).as_posix() + "/"
+                paths = (root / path.lstrip("/") for path in bundle.paths
+                         if path.casefold().startswith(prefix.casefold()) and path.casefold().endswith(".sii")) if bundle else defs_root.rglob("*.sii")
+                groups.append((directory, sorted(paths)))
         hookup_root = root / "def" / "vehicle" / "addon_hookups"
-        for file in sorted([*hookup_root.rglob("*.sii"), *hookup_root.rglob("*.sui")]):
-            relative = "/" + file.relative_to(root).as_posix()
-            for record_type, unit, body in _records(file.read_text(encoding="utf-8", errors="replace")):
-                entries.append(self._catalog_entry(relative + "#" + unit, unit, "hookup", file, _properties(body), record_type))
+        paths = (root / path.lstrip("/") for path in bundle.paths
+                 if path.casefold().startswith("/def/vehicle/addon_hookups/") and Path(path).suffix.casefold() in (".sii", ".sui")) if bundle else (
+                     file for file in hookup_root.rglob("*") if file.suffix.casefold() in (".sii", ".sui"))
+        groups.append(("hookup", sorted(paths)))
+        total = sum(len(files) for _, files in groups)
+        completed = 0
+        for directory, files in groups:
+            definitions = bundle.iter_texts("/" + file.relative_to(root).as_posix() for file in files) if bundle else (
+                ("/" + file.relative_to(root).as_posix(), file.read_text(encoding="utf-8", errors="replace")) for file in files)
+            for relative, definition in definitions:
+                file = root / relative.lstrip("/")
+                if self.progress and completed % 64 == 0:
+                    self.progress("Indexing parts", file.name, completed, total)
+                for record_type, unit, body in _records(definition):
+                    if directory != "hookup" and (not record_type.startswith("accessory_") or not record_type.endswith("_data")):
+                        continue
+                    category = directory or record_type.removeprefix("accessory_").removesuffix("_data")
+                    entries.append(self._catalog_entry(relative + ("#" + unit if directory == "hookup" else ""), unit, category, file, _properties(body), record_type))
+                completed += 1
+        if self.progress:
+            self.progress("Indexing parts", f"{len(entries):,} parts found.", total, total)
         return entries
 
     @staticmethod
@@ -375,7 +558,13 @@ class AssetStore:
 
     def definition(self, path_or_unit: str) -> dict[str, Any]:
         """Resolve either a definition path or SII unit ID from the imported catalog."""
-        return next((item for item in reversed(self.ensure_catalog()) if item["path"].casefold() == path_or_unit.casefold() or item["unitId"].casefold() == path_or_unit.casefold() or item["unitName"].casefold() == path_or_unit.casefold()), None)
+        with _IMPORT_LOCK:
+            catalog = self.ensure_catalog()
+            if self._definition_catalog is not catalog:
+                self._definitions = {value.casefold(): entry for entry in catalog
+                                     for value in (entry["path"], entry.get("unitId", ""), entry.get("unitName", "")) if value}
+                self._definition_catalog = catalog
+            return self._definitions.get(path_or_unit.casefold())
 
     def paint_job(self, path: str, cancelled=None, textures=True, *, include_overrides=True, _entry=None, _fingerprint=None) -> dict:
         """Import paint masks once, including the game's accessory overrides."""
@@ -392,9 +581,11 @@ class AssetStore:
                 return {}
             root = self.cache_path / "catalog" / fingerprint
             def expand(file, visited=()):
+                file = Path(os.path.abspath(file))
                 if file in visited:
                     raise ValueError(f"Circular paint job include: {file}")
-                return re.sub(r'@include\s+"([^"\n]+)"', lambda match: expand(file.parent / match[1], (*visited, file)), file.read_text("utf-8"))
+                return re.sub(r'@include\s+"([^"\n]+)"', lambda match: expand(file.parent / match[1], (*visited, file)),
+                              self._definition_text(file, root, cancelled))
             text = expand(root / entry["sourcePath"].lstrip("/"))
             settings = next(_properties(body) for kind, unit, body in _records(text) if unit == entry["unitId"])
             if not textures:
@@ -404,7 +595,8 @@ class AssetStore:
             overrides = {}
             definition_file = root / entry["sourcePath"].lstrip("/")
             override_file = definition_file.parent / "accessory" / definition_file.name
-            if include_overrides and override_file.is_file():
+            bundle = self._definition_bundle(root)
+            if include_overrides and (override_file.is_file() or bundle is not None and "/" + override_file.relative_to(root).as_posix() in bundle):
                 for kind, unit, body in _records(expand(override_file)):
                     if kind == "simple_paint_job_data":
                         values = _properties(body)
@@ -431,6 +623,91 @@ class AssetStore:
             cache[key] = result
             return result
 
+    def _model_paths(self, entry: dict, look=None, variant=None, *, fingerprint=None):
+        """Keep model selection and cache destinations identical for single and batch imports."""
+        fields = entry.get("fields", {})
+        model_options = (
+            (entry.get("exteriorModel"), entry.get("exteriorLook"), entry.get("exteriorVariant")),
+            (entry.get("extModel"), entry.get("extLook"), entry.get("extVariant")),
+            (entry.get("baseModel") or fields.get("model") or fields.get("model[]") or fields.get("detail_model"), entry.get("look"), entry.get("variant")),
+            (entry.get("interiorModel"), entry.get("interiorLook"), entry.get("interiorVariant")),
+        )
+        selected = next(((path, model_look, model_variant) for path, model_look, model_variant in model_options if path), None)
+        if selected is None:
+            raise ValueError(f"{entry['path']} has no model path; this is a model-less definition.")
+        model_value, model_look, model_variant = selected
+        model_path = _unquote(model_value[-1] if isinstance(model_value, list) else model_value).replace("\\", "/").removesuffix(".pmd")
+        look = _unquote(look) if look else model_look
+        variant = _unquote(variant) if variant else model_variant
+        fingerprint = fingerprint or self._fingerprint()
+        cache_key = hashlib.sha256(f"{fingerprint}:{self._parser_fingerprint}:{entry['path']}:{look}:{variant}".encode()).hexdigest()
+        key = hashlib.sha256((fingerprint + model_path).encode()).hexdigest()[:20]
+        export = self.cache_path / "models" / key
+        return model_path, look, variant, cache_key, export, export / "parsed" / f"{cache_key}.json"
+
+    def prepare_models(self, requests, cancelled=None) -> None:
+        """Convert uncached fitted models together without loading their geometry into memory."""
+        with _IMPORT_LOCK:
+            if cancelled and cancelled():
+                raise CancelledError()
+            if not self._converter_capabilities().get("batch"):
+                return
+            self._batch_failures.clear()
+            fingerprint = self._fingerprint()
+            jobs = {}
+            for path, look, variant in requests:
+                if cancelled and cancelled():
+                    raise CancelledError()
+                entry = self.definition(path)
+                if not entry:
+                    continue
+                try:
+                    model_path, _, _, cache_key, export, parsed = self._model_paths(entry, look, variant, fingerprint=fingerprint)
+                except ValueError:
+                    continue
+                if cache_key in self._model_cache or parsed.is_file():
+                    continue
+                geometry = export / (model_path.lstrip("/") + ".pim")
+                incomplete = geometry.with_suffix(".export-incomplete")
+                if not incomplete.exists() and (geometry.is_file() or geometry.with_suffix(".sgm").is_file()):
+                    continue
+                if any(character in value for value in (model_path, str(export)) for character in "\t\r\n"):
+                    raise ValueError("Model paths cannot contain tabs or line breaks in a converter batch.")
+                jobs[model_path] = export, incomplete
+            if not jobs:
+                return
+            self.cache_path.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.cache_path, suffix=".tsv", delete=False) as manifest:
+                for model_path, (export, incomplete) in jobs.items():
+                    incomplete.parent.mkdir(parents=True, exist_ok=True)
+                    incomplete.write_text("ConverterPIX batch export did not finish.\n", encoding="utf-8")
+                    manifest.write(f"model\t{model_path}\t{export}\n")
+            try:
+                if self.progress:
+                    self.progress("Converting fitted models", f"{len(jobs)} uncached models share one archive mount.", 0, len(jobs))
+                output = self._run(["--batch", manifest.name], timeout=max(300, 300 * len(jobs)), cancelled=cancelled, partial_batch=True)
+                statuses = {}
+                for line in output.splitlines():
+                    if not line.startswith("{"):
+                        continue
+                    try:
+                        status = json.loads(line)
+                    except ValueError:
+                        continue
+                    index = status.get("garageJob") if isinstance(status, dict) else None
+                    if type(index) is int and 0 <= index < len(jobs):
+                        statuses[index] = status
+                for index, (model_path, (_, incomplete)) in enumerate(jobs.items()):
+                    status = statuses.get(index, {})
+                    if status.get("success") is True and status.get("kind") == "model" and status.get("path") == model_path:
+                        incomplete.unlink(missing_ok=True)
+                    else:
+                        self._batch_failures[incomplete] = f"ConverterPIX batch failed for {model_path}: {status.get('error') or output[-1500:]}"
+                if self.progress:
+                    self.progress("Converting fitted models", "Model conversion batch finished.", len(jobs), len(jobs))
+            finally:
+                Path(manifest.name).unlink(missing_ok=True)
+
     def model(self, definition_path: str, look: str | None = None, variant: str | None = None, cancelled=None, *, _entry=None) -> dict[str, Any]:
         with _IMPORT_LOCK:
             if cancelled and cancelled():
@@ -442,42 +719,31 @@ class AssetStore:
             if entry is None:
                 raise FileNotFoundError(f"No catalog definition found for {definition_path!r}.")
             fields = entry.get("fields", {})
-            model_options = (
-                (entry.get("exteriorModel"), entry.get("exteriorLook"), entry.get("exteriorVariant")),
-                (entry.get("extModel"), entry.get("extLook"), entry.get("extVariant")),
-                (entry.get("baseModel") or fields.get("model") or fields.get("model[]") or fields.get("detail_model"), entry.get("look"), entry.get("variant")),
-                (entry.get("interiorModel"), entry.get("interiorLook"), entry.get("interiorVariant")),
-            )
-            selected = next(((path, model_look, model_variant) for path, model_look, model_variant in model_options if path), None)
-            if selected is None:
-                raise ValueError(f"{definition_path} has no model path; this is a model-less definition.")
-            model_value, model_look, model_variant = selected
-            model_path = _unquote(model_value[-1] if isinstance(model_value, list) else model_value).replace("\\", "/").removesuffix(".pmd")
-            look = _unquote(look) if look else model_look
-            variant = _unquote(variant) if variant else model_variant
-            cache_key = hashlib.sha256(f"{self._fingerprint()}:{self._parser_fingerprint}:{entry['path']}:{look}:{variant}".encode()).hexdigest()
+            fingerprint = self._fingerprint()
+            model_path, look, variant, cache_key, export, parsed_path = self._model_paths(entry, look, variant, fingerprint=fingerprint)
             if cache_key in self._model_cache:
                 if cancelled and cancelled():
                     raise CancelledError()
                 return self._model_result(self._model_cache[cache_key])
-            key = hashlib.sha256((self._fingerprint() + model_path).encode()).hexdigest()[:20]
-            export = self.cache_path / "models" / key
-            parsed_path = export / "parsed" / f"{cache_key}.json"
             if parsed_path.is_file():
                 self._model_cache[cache_key] = parsed_path.read_text(encoding="utf-8")
                 if cancelled and cancelled():
                     raise CancelledError()
                 return self._model_result(self._model_cache[cache_key])
             pim_path = export / (model_path.lstrip("/") + ".pim")
+            native_path = pim_path.with_suffix(".sgm")
             pit_path = export / (model_path.lstrip("/") + ".pit")
             incomplete_path = pim_path.with_suffix(".export-incomplete")
-            if not pim_path.is_file() or incomplete_path.exists():
+            if incomplete_path in self._batch_failures:
+                raise RuntimeError(self._batch_failures[incomplete_path])
+            if not (pim_path.is_file() or native_path.is_file()) or incomplete_path.exists():
                 pim_path.parent.mkdir(parents=True, exist_ok=True)
                 incomplete_path.write_text("ConverterPIX export did not finish.\n", encoding="utf-8")
                 self._run(["-e", str(export), "-m", model_path], timeout=300, cancelled=cancelled)
             if cancelled and cancelled():
                 raise CancelledError()
-            if not pim_path.is_file():
+            geometry_path = native_path if native_path.is_file() else pim_path
+            if not geometry_path.is_file():
                 raise FileNotFoundError(f"ConverterPIX did not export geometry for {model_path}: {pim_path}")
             if Image is not None and pit_path.is_file():
                 for material in _blocks(pit_path.read_text(encoding="utf-8", errors="replace"), "Material"):
@@ -494,14 +760,14 @@ class AssetStore:
                             continue
                         incomplete_path.write_text("Glass texture export did not finish.\n", encoding="utf-8")
                         self._run(["-e", str(export), "-t", base + ".tobj"], timeout=120, cancelled=cancelled)
-            model = _parse_model(pim_path, pit_path if pit_path.is_file() else None, export, look, variant)
+            model = _parse_model(geometry_path, pit_path if pit_path.is_file() else None, export, look, variant)
             if fields.get("data[]"):
-                catalog_root = self.cache_path / "catalog" / self._fingerprint()
+                catalog_root = self.cache_path / "catalog" / fingerprint
                 definition = catalog_root / entry["sourcePath"].lstrip("/")
-                load_file = lambda file: self._run(["-e", str(catalog_root), "--extract-file", "/" + file.relative_to(catalog_root).as_posix()], cancelled=cancelled)
-                properties = _patch_definition(definition, entry["unitId"], load_file=load_file, kind=None, all_values=True)
+                read_file = lambda file: self._definition_text(file, catalog_root, cancelled)
+                properties = _patch_definition(definition, entry["unitId"], read_file=read_file, kind=None, all_values=True)
                 for reference in properties["data[]"]:
-                    toy = _patch_definition(definition, _unquote(reference), load_file=load_file, kind="physics_toy_data")
+                    toy = _patch_definition(definition, _unquote(reference), read_file=read_file, kind="physics_toy_data")
                     if toy is None:
                         raise ValueError(f"Physics toy definition unavailable: {reference} in {entry['sourcePath']}")
                     toy_path = entry["sourcePath"] + "#" + _unquote(reference)
@@ -515,10 +781,10 @@ class AssetStore:
                         piece["positions"] = [value + offset[index % 3] for index, value in enumerate(piece["positions"])]
                     model["pieces"].extend(child["pieces"])
             if fields.get("data"):
-                catalog_root = self.cache_path / "catalog" / self._fingerprint()
+                catalog_root = self.cache_path / "catalog" / fingerprint
                 definition = catalog_root / entry["sourcePath"].lstrip("/")
-                patch = _patch_definition(definition, _unquote(fields["data"]), load_file=lambda file:
-                    self._run(["-e", str(catalog_root), "--extract-file", "/" + file.relative_to(catalog_root).as_posix()], cancelled=cancelled))
+                patch = _patch_definition(definition, _unquote(fields["data"]), read_file=lambda file:
+                    self._definition_text(file, catalog_root, cancelled))
                 if patch:
                     material_path = _unquote(patch["material"])
                     material_file = export / material_path.lstrip("/")
@@ -575,21 +841,22 @@ class AssetStore:
         return model
 
 
-def _patch_definition(file: Path, unit: str, visited=None, load_file=None, *, kind="physics_patch_data", all_values=False) -> dict | None:
+def _patch_definition(file: Path, unit: str, visited=None, load_file=None, *, kind="physics_patch_data", all_values=False, read_file=None) -> dict | None:
+    file = Path(os.path.abspath(file))
     visited = set() if visited is None else visited
     if file in visited:
         raise ValueError(f"Circular physics patch include: {file}")
     visited = visited | {file}
-    if not file.is_file() and load_file:
+    if read_file is None and not file.is_file() and load_file:
         file.parent.mkdir(parents=True, exist_ok=True)
         load_file(file)
-    text = file.read_text(encoding="utf-8")
+    text = read_file(file) if read_file else file.read_text(encoding="utf-8")
     for record_kind, name, body in _records(text):
         if (kind is None or record_kind == kind) and name == unit:
             properties = _properties(body)
             return properties if all_values else {key: values[-1] for key, values in properties.items() if values}
     for include in re.findall(r'@include\s+"([^"\n]+)"', text):
-        patch = _patch_definition(file.parent / include, unit, visited, load_file, kind=kind, all_values=all_values)
+        patch = _patch_definition(file.parent / include, unit, visited, load_file, kind=kind, all_values=all_values, read_file=read_file)
         if patch:
             return patch
     return None
@@ -628,13 +895,16 @@ def _records(text: str) -> list[tuple[str, str, str]]:
         start = match.end()
         depth = 1
         end = start
-        for end in range(start, len(text)):
-            if text[end] == "{":
+        for token in _BRACES.finditer(text, start):
+            end = token.start()
+            if token[0] == "{":
                 depth += 1
-            elif text[end] == "}":
+            else:
                 depth -= 1
                 if depth == 0:
                     break
+        else:
+            end = max(start, len(text) - 1)
         records.append((match.group(1), match.group(2), text[start:end]))
     return records
 
@@ -644,9 +914,11 @@ def _blocks_after_record(text: str, record_type: str, unit: str) -> str:
 
 
 def _parse_model(pim_path: Path, pit_path: Path | None, export: Path, selected_look: str | None = None, selected_variant: str | None = None) -> dict[str, Any]:
-    pim = pim_path.read_text(encoding="utf-8", errors="replace")
+    native = read_viewer_model(pim_path) if pim_path.suffix == ".sgm" else None
+    pim = "" if native else pim_path.read_text(encoding="utf-8", errors="replace")
     pit = pit_path.read_text(encoding="utf-8", errors="replace") if pit_path else ""
-    pim_materials = [_properties(body) for body in _blocks(pim, "Material")]
+    pim_materials = [{"Alias": [material["alias"]], "Effect": [material["effect"]]} for material in native["materials"]] if native else [
+        _properties(body) for body in _blocks(pim, "Material")]
     material_names = [_unquote(material.get("Alias", [""])[-1]) for material in pim_materials]
     material_effects = [_unquote(material.get("Effect", [""])[-1]) for material in pim_materials]
     looks = _blocks(pit, "Look")
@@ -666,7 +938,7 @@ def _parse_model(pim_path: Path, pit_path: Path | None, export: Path, selected_l
             item = _properties(texture)
             if item.get("Tag") and item.get("Value"):
                 textures[item["Tag"][-1].strip('"')] = item["Value"][-1].strip('"')
-        pit_materials.append({"attributes": attrs, "textures": textures, "effect": _unquote(_properties(body).get("Effect", [""])[-1])})
+        pit_materials.append({"attributes": attrs, "textures": textures, "effect": _unquote(properties.get("Effect", [""])[-1])})
     visible_part_names = None
     variants = _blocks(pit, "Variant")
     chosen_variant_body = next((body for body in variants if _properties(body).get("Name", [""])[-1].strip('"').casefold() == selected_variant.casefold()), None) if selected_variant else None
@@ -686,38 +958,39 @@ def _parse_model(pim_path: Path, pit_path: Path | None, export: Path, selected_l
     pieces = []
     included_piece_indexes = set()
     piece_parts = {}
-    for part in _blocks(pim, "Part"):
-        fields = _properties(part)
+    part_fields = [{"Name": [part["name"]], "Pieces": [" ".join(map(str, part["pieces"]))],
+                    "Locators": [" ".join(map(str, part["locators"]))]} for part in native["parts"]] if native else [
+                        _properties(part) for part in _blocks(pim, "Part")]
+    for fields in part_fields:
         part_name = fields.get("Name", [""])[-1].strip('"')
         part_pieces = [int(value) for value in re.findall(r"\d+", " ".join(fields.get("Pieces", [])))]
         for part_piece in part_pieces:
             piece_parts.setdefault(part_piece, []).append(part_name)
     if visible_part_names is not None:
-        for part in _blocks(pim, "Part"):
-            fields = _properties(part)
+        for fields in part_fields:
             if fields.get("Name", [""])[-1].strip('"') in visible_part_names:
                 included_piece_indexes.update(int(value) for value in re.findall(r"\d+", " ".join(fields.get("Pieces", []))))
-    for piece_index, piece in enumerate(_blocks(pim, "Piece")):
+    for piece_index, piece in enumerate(native["pieces"] if native else _blocks(pim, "Piece")):
         if visible_part_names is not None and piece_index not in included_piece_indexes:
             continue
-        properties = _properties(piece)
-        streams = {}
-        for stream in _blocks(piece, "Stream"):
-            stream_props = _properties(stream)
-            tag = stream_props.get("Tag", [""])[-1].strip('"')
-            streams[tag] = _vectors(stream)
-        triangle_values = []
-        for triangles in _blocks(piece, "Triangles"):
-            for triangle in re.finditer(r'^\s*\d+\s*\(\s*(\d+)\s+(\d+)\s+(\d+)\s*\)', triangles, re.M):
-                triangle_values.extend(int(value) for value in triangle.groups())
-        material_index = int(properties.get("Material", ["0"])[-1])
-        material_data = pit_materials[material_index] if material_index < len(pit_materials) else {"attributes": {}, "textures": {}}
-        diffuse = material_data["attributes"].get("diffuse", [0.75, 0.75, 0.75])
-        alias = material_names[material_index] if material_index < len(material_names) else f"material_{material_index}"
-        effect = material_data.get("effect") or (material_effects[material_index] if material_index < len(material_effects) else "")
+        material_index = piece["material"] if native else int(_properties(piece).get("Material", ["0"])[-1])
+        material_data = pit_materials[material_index] if 0 <= material_index < len(pit_materials) else {"attributes": {}, "textures": {}}
+        alias = material_names[material_index] if 0 <= material_index < len(material_names) else f"material_{material_index}"
+        effect = material_data.get("effect") or (material_effects[material_index] if 0 <= material_index < len(material_effects) else "")
         effect_tokens = effect.casefold().split(".")
         if "shadowonly" in effect_tokens or "fakeshadow" in effect_tokens:
             continue
+        streams = piece["streams"] if native else {}
+        triangle_values = piece["indices"] if native else []
+        if not native:
+            for stream in _blocks(piece, "Stream"):
+                stream_props = _properties(stream)
+                tag = stream_props.get("Tag", [""])[-1].strip('"')
+                streams[tag] = _vectors(stream)
+            for triangles in _blocks(piece, "Triangles"):
+                for triangle in re.finditer(r'^\s*\d+\s*\(\s*(\d+)\s+(\d+)\s+(\d+)\s*\)', triangles, re.M):
+                    triangle_values.extend(int(value) for value in triangle.groups())
+        diffuse = material_data["attributes"].get("diffuse", [0.75, 0.75, 0.75])
         transparent = any(token in effect_tokens for token in ("over", "blend", "a", "glass"))
         texture_url = _texture_url(material_data["textures"], export, ignore_alpha=not transparent or "glass" in effect_tokens)
         mask_textures = {"texture_base": value for tag, value in material_data["textures"].items() if "texture_mask" in tag}
@@ -748,12 +1021,17 @@ def _parse_model(pim_path: Path, pit_path: Path | None, export: Path, selected_l
         })
     locators = []
     included_locator_indexes = set()
-    for part in _blocks(pim, "Part"):
-        fields = _properties(part)
+    for fields in part_fields:
         if visible_part_names is None or fields.get("Name", [""])[-1].strip('"') in visible_part_names:
             included_locator_indexes.update(int(value) for value in re.findall(r"\d+", " ".join(fields.get("Locators", []))))
-    for locator_index, locator in enumerate(_blocks(pim, "Locator")):
+    for locator_index, locator in enumerate(native["locators"] if native else _blocks(pim, "Locator")):
         if visible_part_names is not None and locator_index not in included_locator_indexes:
+            continue
+        if native:
+            values = {name: locator.get(name) for name in ("name", "position", "rotation", "scale", "hookup")}
+            if values["hookup"]:
+                values["hookup"] = _unquote(values["hookup"])
+            locators.append(values)
             continue
         fields = _properties(locator)
         rotation = _float_text(fields.get("Rotation", [""])[-1])[:4]

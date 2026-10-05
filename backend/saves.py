@@ -23,10 +23,11 @@ def fields(block: str) -> dict[str, str]:
     return dict(FIELD.findall(block))
 
 
-def refs(block: str, name: str) -> list[str]:
-    values = fields(block)
+def refs(block: str, name: str, values: dict | None = None) -> list[str]:
+    values = fields(block) if values is None else values
     count = int(values.get(name, "0"))
-    indices = {int(key[len(name) + 1:-1]) for key in values if re.fullmatch(re.escape(name) + r"\[\d+\]", key)}
+    pattern = re.compile(re.escape(name) + r"\[(\d+)\]")
+    indices = {int(match[1]) for key in values if (match := pattern.fullmatch(key))}
     if indices != set(range(count)):
         raise ValueError(f"Invalid {name} array: count and entries differ.")
     return [values[f"{name}[{i}]"] for i in range(count)]
@@ -67,8 +68,8 @@ def set_array(block: str, key: str, values: list[str]) -> str:
     return pattern.sub(lambda m: m[1] + newline + "".join(f" {key}[{i}]: {v}{newline}" for i, v in enumerate(values)), block, count=1)
 
 
-def read_sii(path: Path, decryptor: Path | None) -> str:
-    data = path.read_bytes()
+def read_sii(path: Path, decryptor: Path | None, *, source_data: bytes | None = None) -> str:
+    data = path.read_bytes() if source_data is None else source_data
     if data.startswith((b"SiiNunit", b"\xef\xbb\xbfSiiNunit")):
         return data.decode("utf-8-sig")
     if not decryptor or not decryptor.is_file():
@@ -96,11 +97,12 @@ def game_running() -> bool:
 
 
 class SaveSession:
-    def __init__(self, path: Path, text: str, save_id: str, name: str):
+    def __init__(self, path: Path, text: str, save_id: str, name: str, *, source_data: bytes | None = None):
         self.path, self.text, self.save_id, self.name = path, text, save_id, name
         self.session_id = uuid.uuid4().hex
-        self.source_hash = hashlib.sha256(path.read_bytes()).hexdigest()
-        self.bom = path.read_bytes().startswith(b"\xef\xbb\xbf")
+        source_data = path.read_bytes() if source_data is None else source_data
+        self.source_hash = hashlib.sha256(source_data).hexdigest()
+        self.bom = source_data.startswith(b"\xef\xbb\xbf")
         self.matches = list(UNIT.finditer(text))
         self.units = {m[2]: (m[1], m[0]) for m in self.matches}
         if len(self.units) != len(self.matches) or not text.lstrip().startswith("SiiNunit"):
@@ -162,7 +164,7 @@ class SaveSession:
                 data = fields(block)
                 if not unquote(data.get("data_path", '""')).startswith("/def/"):
                     raise ValueError(f"Invalid definition path on {accessory_id}.")
-                names, hookups = refs(block, "slot_name"), refs(block, "slot_hookup")
+                names, hookups = refs(block, "slot_name", data), refs(block, "slot_hookup", data)
                 if len(names) != len(hookups):
                     raise ValueError(f"Attachment names and hookups differ on {accessory_id}.")
 
@@ -173,13 +175,15 @@ class SaveSession:
             block = self.block(truck_id)
             data = fields(block)
             accessories = []
-            for unit_id in refs(block, "accessories"):
+            for unit_id in refs(block, "accessories", data):
                 accessory = self.block(unit_id)
                 values = fields(accessory)
                 path = unquote(values["data_path"])
-                accessories.append({"id": unit_id, "type": UNIT.match(accessory)[1], "dataPath": path,
-                                    "category": category(path), "fields": values,
-                                    "slots": [{"name": unquote(n), "hookup": unquote(h)} for n, h in zip(refs(accessory, "slot_name"), refs(accessory, "slot_hookup"))]})
+                item = {"dataPath": path, "category": category(path)}
+                if truck_id == self.truck_id:
+                    item.update(id=unit_id, type=self.units[unit_id][0] if unit_id in self.units else UNIT.match(accessory)[1], fields=values,
+                                slots=[{"name": unquote(n), "hookup": unquote(h)} for n, h in zip(refs(accessory, "slot_name", values), refs(accessory, "slot_hookup", values))])
+                accessories.append(item)
             cabin = next((a for a in accessories if a["category"] == "cabin"), None)
             kind = "trailer" if truck_id in self.trailer_ids else "truck"
             base = next((a for a in accessories if a["dataPath"].startswith("/def/vehicle/trailer_owned/")), None) if kind == "trailer" else cabin

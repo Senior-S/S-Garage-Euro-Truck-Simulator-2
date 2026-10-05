@@ -16,6 +16,8 @@ def resolve_mods(save: Path, profiles_root: Path, game: Path | None, decryptor: 
         profile = save.parent.parent.parent / "profile.sii"
         tokens = re.findall(r'^\s*active_mods\[\d+\]:\s*"([^"\r\n]+)"', read_sii(profile, decryptor), re.M) if profile.is_file() else []
         tokens = [token.split("|")[0] for token in tokens]
+    if not tokens:
+        return [], []
     libraries = [library for steam in _find_steam_roots() for library in _library_paths(steam)]
     if game:
         libraries.insert(0, game.parent.parent.parent)

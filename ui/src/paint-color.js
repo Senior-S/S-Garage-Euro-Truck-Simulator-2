@@ -1,4 +1,5 @@
-import * as THREE from 'three'
+// Keep color conversion available before the full 3D viewer is loaded.
+import { Color } from 'three/src/math/Color.js'
 
 // SII colors are linear RGB; browser color pickers use sRGB.
 export function paintHex(value = '(1, 1, 1)') {
@@ -8,7 +9,7 @@ export function paintHex(value = '(1, 1, 1)') {
     bytes.setUint32(0, parseInt(token.slice(1), 16))
     return bytes.getFloat32(0)
   })
-  return '#' + new THREE.Color(...(components.length >= 3 ? components.slice(0, 3) : [1, 1, 1])).getHexString()
+  return '#' + new Color(...(components.length >= 3 ? components.slice(0, 3) : [1, 1, 1])).getHexString()
 }
 
-export function paintRgb(hex) { return new THREE.Color(hex).toArray() }
+export function paintRgb(hex) { return new Color(hex).toArray() }

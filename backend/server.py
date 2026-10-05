@@ -21,6 +21,7 @@ from assets import AssetStore, _numbers
 from saves import SaveSession, read_sii, game_running
 from scene import build_scene, paint_material
 from mods import resolve_mods
+from progress import LoadingProgress
 
 
 APP = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
@@ -57,6 +58,11 @@ class Garage:
         self.model_requests = {}
         self.model_request_lock = threading.Lock()
         self.source_issues = []
+        self.progress = LoadingProgress()
+        self.assets.progress = self.progress.update
+        self.catalog_lock = threading.Lock()
+        self.catalog_source = None
+        self.catalog_payload = None
 
     def decryptor(self) -> Path | None:
         configured = self.config.get("decryptorPath") or os.environ.get("ETS_GARAGE_DECRYPTOR")
@@ -110,18 +116,34 @@ class Garage:
         return sorted(output, key=lambda save: save["modified"], reverse=True)
 
     def load(self, save_id: str) -> dict:
-        listing = {save["id"]: save for save in self.saves()}
-        save = listing.get(save_id)
-        if not save:
+        self.progress.update("Locating save")
+        parts = save_id.split("/")
+        if len(parts) != 3 or any(part in ("", ".", "..") or "\\" in part for part in parts):
             raise ValueError("Save not found in the configured profiles folder.")
-        root_name, profile, folder = save_id.split("/")
-        root = next(root for root in self.profile_roots() if root.name == root_name)
+        root_name, profile, folder = parts
+        root = next((root for root in self.profile_roots() if root.name == root_name), None)
+        if root is None:
+            raise ValueError("Save not found in the configured profiles folder.")
         path = (root / profile / "save" / folder / "game.sii").resolve()
         if not path.is_relative_to(root.resolve()):
             raise ValueError("Save path leaves the profiles folder.")
-        text = read_sii(path, self.decryptor())
-        session = SaveSession(path, text, save_id, f'{save["profile"]} / {save["name"]}')
-        mod_sources, issues = resolve_mods(path, root, self.assets.game_path, self.decryptor())
+        if not path.is_file():
+            raise ValueError("Save not found in the configured profiles folder.")
+        try:
+            name = bytes.fromhex(profile).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            name = profile
+        self.progress.update("Reading save", folder.replace("_", " ").title())
+        source_data = path.read_bytes()
+        decryptor = self.decryptor()
+        if not source_data.startswith((b"SiiNunit", b"\xef\xbb\xbfSiiNunit")):
+            self.progress.update("Decrypting save", "Reading a temporary copy. Your original save stays intact.")
+        text = read_sii(path, decryptor, source_data=source_data)
+        self.progress.update("Parsing vehicles", "Reading trucks, trailers, and their fitted parts.")
+        session = SaveSession(path, text, save_id, f'{name} / {folder.replace("_", " ").title()}', source_data=source_data)
+        self.progress.update("Resolving saved mods", "Checking the sources used by this save.")
+        mod_sources, issues = resolve_mods(path, root, self.assets.game_path, decryptor)
+        self.progress.update("Checking game assets", f"{len(mod_sources)} mod sources selected.")
         self.assets.set_mod_sources(mod_sources)
         self.source_issues = issues
         self.session = session
@@ -187,7 +209,7 @@ class Handler(BaseHTTPRequestHandler):
                         garage.scene_cancel.set()
                     self.json_response({"cancelled": True})
                     return
-                changes_scene = parsed.path in ("/api/load", "/api/select", "/api/edit", "/api/undo", "/api/redo", "/api/config")
+                changes_scene = parsed.path in ("/api/load", "/api/select", "/api/edit", "/api/undo", "/api/redo", "/api/config", "/api/rebuild-cache")
                 if changes_scene:
                     garage.scene_cancel.set()
                 with garage.lock:
@@ -199,7 +221,21 @@ class Handler(BaseHTTPRequestHandler):
                         if body["sessionId"] != session.session_id or body.get("revision", session.revision) != session.revision:
                             raise ValueError("The editing session changed in another window. Reload the garage before applying this action.")
                     if parsed.path == "/api/load":
-                        result = garage.load(body["saveId"])
+                        with garage.progress.track(query.get("requestId", [None])[0], "Opening save"):
+                            result = garage.load(body["saveId"])
+                    elif parsed.path == "/api/rebuild-cache":
+                        if body.get("accepted") is not True:
+                            raise ValueError("Accept the cache rebuild notice before clearing the old cache.")
+                        with garage.model_request_lock:
+                            for cancelled in garage.model_requests.values():
+                                cancelled.set()
+                        with garage.progress.track(query.get("requestId", [None])[0], "Rebuilding asset cache"), garage.catalog_lock:
+                            garage.assets.rebuild_cache()
+                            garage.catalog_source = garage.catalog_payload = None
+                            garage.scene_cache = garage.scene_key = garage.scene_model_scope = None
+                            garage.scene_models.clear()
+                            garage.assets.catalog()
+                            result = garage.status()
                     elif parsed.path == "/api/config":
                         if garage.session and garage.session.state()["dirty"]:
                             raise ValueError("Save or discard your truck edits before changing game folders.")
@@ -226,6 +262,7 @@ class Handler(BaseHTTPRequestHandler):
                         cache.mkdir(parents=True, exist_ok=True)
                         config["cachePath"] = str(cache)
                         assets = AssetStore(config.get("gamePath"), cache)
+                        assets.progress = garage.progress.update
                         garage.config_file.write_text(json.dumps(config, indent=2), "utf-8")
                         garage.config, garage.profiles, garage.assets = config, profiles, assets
                         garage.session = None
@@ -264,21 +301,28 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/status":
                 self.json_response(garage.status())
+            elif parsed.path == "/api/progress":
+                self.json_response(garage.progress.snapshot(query.get("requestId", [])[:16]))
             elif parsed.path == "/api/saves":
                 self.json_response(garage.saves())
             elif parsed.path == "/api/catalog":
-                visible = ("path", "name", "category", "brand", "unitType", "unitId", "model", "price", "iconUrl")
-                entries = []
-                for entry in garage.assets.catalog():
-                    if entry.get("unitType", "").startswith("physics_"):
-                        continue
-                    item = {key: entry.get(key) for key in visible}
-                    # Keep visual and functional differences; price/unlock do not
-                    # change an accessory in this save editor.
-                    fields = {key: value for key, value in entry.get("fields", {}).items() if key not in ("price", "unlock")}
-                    signature = [entry.get("category"), entry.get("unitType"), entry.get("name"), fields]
-                    item["duplicateKey"] = hashlib.sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest() if fields else entry["path"]
-                    entries.append(item)
+                with garage.progress.track(query.get("requestId", [None])[0], "Loading parts catalog"), garage.catalog_lock:
+                    source = garage.assets.catalog()
+                    if garage.catalog_source is not source:
+                        garage.progress.update("Preparing parts catalog", f"{len(source):,} definitions loaded.")
+                        visible = ("path", "name", "category", "brand", "unitType", "unitId", "model", "price", "iconUrl")
+                        entries = []
+                        for entry in source:
+                            if entry.get("unitType", "").startswith("physics_"):
+                                continue
+                            item = {key: entry.get(key) for key in visible}
+                            # Price/unlock do not change an accessory in this editor.
+                            fields = {key: value for key, value in entry.get("fields", {}).items() if key not in ("price", "unlock")}
+                            signature = [entry.get("category"), entry.get("unitType"), entry.get("name"), fields]
+                            item["duplicateKey"] = hashlib.sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest() if fields else entry["path"]
+                            entries.append(item)
+                        garage.catalog_source, garage.catalog_payload = source, entries
+                    entries = garage.catalog_payload
                 self.json_response(entries)
             elif parsed.path == "/api/state":
                 with garage.lock:
@@ -344,27 +388,29 @@ class Handler(BaseHTTPRequestHandler):
                         truck = session.state()["truck"]
                         assets, source_issues = garage.assets, list(garage.source_issues)
                 if cached is None:
-                    with garage.scene_lock:
-                        scope = (*key[:2], id(assets))
-                        if garage.scene_model_scope != scope:
-                            garage.scene_models = {}
-                            garage.scene_model_scope = scope
-                        # A switch can cancel an assembly while it waits for asset import.
-                        while not assets.lock.acquire(timeout=.1):
-                            if cancelled.is_set():
-                                raise CancelledError()
-                        try:
-                            if cancelled.is_set():
-                                raise CancelledError()
-                            cached = build_scene(truck, assets, cancelled=cancelled.is_set, model_cache=garage.scene_models)
-                            cached["issues"].extend(source_issues)
-                        finally:
-                            assets.lock.release()
-                        with garage.lock:
-                            current = garage.require_session()
-                            if cancelled.is_set() or key != (current.session_id, current.truck_id, current.revision):
-                                raise CancelledError()
-                            garage.scene_cache, garage.scene_key = cached, key
+                    with garage.progress.track(query.get("requestId", [None])[0], "Preparing vehicle preview"):
+                        garage.progress.update("Waiting for game assets", "Finishing the current import before loading this vehicle.")
+                        with garage.scene_lock:
+                            scope = (*key[:2], id(assets))
+                            if garage.scene_model_scope != scope:
+                                garage.scene_models = {}
+                                garage.scene_model_scope = scope
+                            # A switch can cancel an assembly while it waits for asset import.
+                            while not assets.lock.acquire(timeout=.1):
+                                if cancelled.is_set():
+                                    raise CancelledError()
+                            try:
+                                if cancelled.is_set():
+                                    raise CancelledError()
+                                cached = build_scene(truck, assets, cancelled=cancelled.is_set, model_cache=garage.scene_models)
+                                cached["issues"].extend(source_issues)
+                            finally:
+                                assets.lock.release()
+                            with garage.lock:
+                                current = garage.require_session()
+                                if cancelled.is_set() or key != (current.session_id, current.truck_id, current.revision):
+                                    raise CancelledError()
+                                garage.scene_cache, garage.scene_key = cached, key
                 if since is not None:
                     known = {part["model"]["key"] for part in previous["parts"]} if previous else set()
                     models = {part["model"]["key"]: part["model"] for part in cached["parts"] if part["model"]["key"] not in known}

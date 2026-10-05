@@ -4,13 +4,76 @@ import struct
 import tempfile
 import unittest
 from concurrent.futures import CancelledError
+from concurrent.futures import ThreadPoolExecutor
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.assets import AssetStore, Image, _parse_model, _records, _texture_url, _patch_definition, _patch_piece
+from backend.assets import AssetStore, Image, _blocks, _parse_model, _records, _texture_url, _patch_definition, _patch_piece
 
 
 class AssetParserTests(unittest.TestCase):
+    def setUp(self):
+        # Legacy fixtures must not depend on the converter installed on the host.
+        capabilities = patch.object(AssetStore, "_converter_capabilities", return_value={})
+        capabilities.start()
+        self.addCleanup(capabilities.stop)
+
+    def test_block_scanning_preserves_nested_braces_quotes_and_escaped_quotes(self):
+        text = r'''Piece {
+Name: "a } and \"{ inside a name"
+Stream { Tag: "_POSITION" Values { (1, 2, 3) } }
+Path: "folder\\"
+} Piece { Name: "second" }'''
+        bodies = _blocks(text, "Piece")
+        self.assertEqual(len(bodies), 2)
+        self.assertIn('Stream { Tag:', bodies[0])
+        self.assertEqual(bodies[1].strip(), 'Name: "second"')
+        self.assertEqual(_blocks(bodies[0], "Values")[0].strip(), '(1, 2, 3)')
+
+    def test_concurrent_catalog_requests_import_once_and_share_the_result(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = AssetStore(cache_path=Path(temp))
+            entered = threading.Event()
+            release = threading.Event()
+            def extract(*args, **kwargs):
+                entered.set()
+                self.assertTrue(release.wait(2))
+            with patch.object(store, "_run", side_effect=extract) as run, patch.object(store, "_read_catalog", return_value=[]), ThreadPoolExecutor(max_workers=2) as executor:
+                first = executor.submit(store.catalog)
+                self.assertTrue(entered.wait(2))
+                waiting = threading.Event()
+                store.progress = lambda *args: waiting.set() if args[0] == "Waiting for game assets" else None
+                second = executor.submit(store.catalog)
+                self.assertTrue(waiting.wait(2))
+                release.set()
+                self.assertIs(first.result(timeout=2), second.result(timeout=2))
+                self.assertEqual(run.call_count, 1)
+
+    def test_interrupted_catalog_cache_is_rebuilt_and_can_be_reopened(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = AssetStore(cache_path=Path(temp))
+            index = store.cache_path / "catalog" / store._fingerprint() / "catalog.json"
+            index.parent.mkdir(parents=True)
+            index.write_text('[{"path":', encoding="utf-8")
+            with patch.object(store, "_run") as run, patch.object(store, "_read_catalog", return_value=[]):
+                self.assertEqual(store.catalog(), [])
+                run.assert_called_once()
+            reopened = AssetStore(cache_path=Path(temp))
+            with patch.object(reopened, "_run", side_effect=AssertionError("Use disk cache")):
+                self.assertEqual(reopened.catalog(), [])
+
+    def test_definition_index_preserves_last_source_priority_and_invalidates(self):
+        store = AssetStore()
+        first = {"path": "/first", "unitId": "shared", "unitName": "shared"}
+        override = {"path": "/override", "unitId": "shared", "unitName": "shared"}
+        store._catalog = [first, override]
+        self.assertIs(store.definition("SHARED"), override)
+        self.assertIs(store.definition("/FIRST"), first)
+        store._catalog = [first]
+        self.assertIs(store.definition("shared"), first)
+        self.assertIsNone(store.definition("/override"))
+
     def test_detail_model_cab_is_renderable_in_fresh_and_cached_catalogs(self):
         path = "/def/vehicle/truck/volvo.fh_2024/cabin/l2h3_8x4_aero.sii"
         model = "/vehicle/truck/volvo_fh_2024/cabin/globe_xl_aero_2024.pmd"

@@ -33,6 +33,62 @@ class MinimalAssets:
 
 
 class ServerTests(unittest.TestCase):
+    def test_cache_rebuild_requires_acceptance_and_reimports_before_returning(self):
+        garage = self.http.garage
+        self.request("/api/load", {"saveId": "profiles/54455354/quicksave"})
+        session = garage.session
+        garage.scene_models["old"] = {}
+        garage.catalog_payload = ["old"]
+        cancelled = threading.Event()
+        garage.model_requests["old"] = cancelled
+        calls = []
+        with patch.object(garage.assets, "rebuild_cache", create=True, side_effect=lambda: calls.append("clear")), patch.object(garage.assets, "catalog", side_effect=lambda: calls.append("import") or []):
+            self.assertEqual(self.request("/api/rebuild-cache", {})[0], 400)
+            self.assertEqual(calls, [])
+            code, result = self.request("/api/rebuild-cache?requestId=rebuild", {"accepted": True})
+        self.assertEqual(code, 200, result)
+        self.assertEqual(calls, ["clear", "import"])
+        self.assertIs(garage.session, session)
+        self.assertEqual(self.path.read_text(), SOURCE)
+        self.assertTrue(cancelled.is_set())
+        self.assertFalse(garage.scene_models)
+        self.assertIsNone(garage.catalog_payload)
+        self.assertEqual(self.request("/api/progress?requestId=rebuild")[1]["rebuild"]["state"], "done")
+
+    def test_progress_remains_responsive_while_catalog_and_session_are_locked(self):
+        garage = self.http.garage
+        started, release = threading.Event(), threading.Event()
+        def catalog():
+            with garage.lock, garage.assets.lock:
+                garage.progress.update("Indexing parts", "Truck parts", 3, 10)
+                started.set()
+                self.assertTrue(release.wait(3))
+            return []
+        with patch.object(garage.assets, "catalog", side_effect=catalog), ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(self.request, "/api/catalog?requestId=import")
+            try:
+                self.assertTrue(started.wait(2))
+                code, progress = self.request("/api/progress?requestId=import&requestId=other-window")
+                self.assertEqual(code, 200)
+                self.assertEqual(list(progress), ["import"])
+                self.assertEqual(progress["import"]["stage"], "Indexing parts")
+                self.assertEqual(progress["import"]["completed"], 3)
+                self.assertEqual(progress["import"]["total"], 10)
+                self.assertEqual(progress["import"]["state"], "running")
+            finally:
+                release.set()
+            self.assertEqual(pending.result(timeout=2)[0], 200)
+        self.assertEqual(self.request("/api/progress?requestId=import")[1]["import"]["state"], "done")
+
+    def test_load_reads_only_the_selected_save_and_rejects_path_escape(self):
+        with patch.object(self.http.garage, "saves", side_effect=AssertionError("Do not scan every save")):
+            code, state = self.request("/api/load?requestId=save", {"saveId": "profiles/54455354/quicksave"})
+        self.assertEqual(code, 200, state)
+        self.assertEqual(self.request("/api/progress?requestId=save")[1]["save"]["state"], "done")
+        for save_id in ("profiles/../quicksave", "profiles/54455354/../../outside", "profiles/54455354/..\\outside", "unknown/54455354/quicksave"):
+            self.assertEqual(self.request("/api/load?requestId=bad", {"saveId": save_id})[0], 400)
+        self.assertEqual(self.request("/api/progress?requestId=bad")[1]["bad"]["state"], "error")
+
     def test_owned_trailer_selection_edit_and_scene_over_http(self):
         from test_trailers import TRAILER_SOURCE
         self.path.write_text(TRAILER_SOURCE, encoding="utf-8")

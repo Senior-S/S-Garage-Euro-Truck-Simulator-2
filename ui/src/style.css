@@ -88,6 +88,33 @@ body,.app-shell{background:#141820;color:var(--text)}
 @media(prefers-reduced-motion:reduce){.refresh-spinning{animation:none}}
 
 .settings-modal{max-height:calc(100vh - 32px);overflow:auto}
+.cache-rebuild-window{width:min(520px,calc(100vw - 32px))}
+.cache-rebuild-window .modal-top h2{line-height:1.15}
+.guide-window .cache-rebuild-error{color:#f2c2b5}
+
+.loading-progress{position:absolute;z-index:5;bottom:24px;left:24px;width:min(440px,calc(100% - 48px));max-height:calc(100% - 130px);overflow:auto;padding:18px;background:#202833;border:1px solid #596a82;border-radius:4px;color:#e0e8f2;font:400 12px/1.5 'IBM Plex Sans',sans-serif}
+.loading-progress-heading{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:14px}
+.loading-progress-heading strong{font-size:14px;font-weight:600}
+.loading-progress-heading>span{font-size:11px;color:#bac6d6}
+.loading-progress-job+.loading-progress-job{margin-top:16px;padding-top:14px;border-top:1px solid #46566b}
+.loading-progress-stage{display:flex;justify-content:space-between;gap:12px;font-weight:500}
+.loading-progress-time{display:flex;align-items:center;gap:5px;white-space:nowrap;font:11px var(--mono);color:#c4d0e0}
+.loading-progress progress{display:block;width:100%;height:5px;margin:9px 0;appearance:none;border:0;border-radius:2px;overflow:hidden;background:#3e4b5e;accent-color:#b2c4dc}
+.loading-progress progress::-webkit-progress-bar{background:#3e4b5e}
+.loading-progress progress::-webkit-progress-value{background:#b2c4dc}
+.loading-progress progress::-moz-progress-bar{background:#b2c4dc}
+.loading-progress progress:indeterminate{background:#3e4b5e}
+.loading-progress progress:indeterminate::-webkit-progress-bar{background:linear-gradient(90deg,#3e4b5e 0%,#b2c4dc 50%,#3e4b5e 100%);background-size:200% 100%;animation:loading-working 2s linear infinite}
+.loading-progress-detail{display:flex;justify-content:space-between;align-items:baseline;gap:12px;color:#c4d0e0;font-size:11px}
+.loading-progress-detail>span:first-child{min-width:0;overflow-wrap:anywhere}
+.loading-progress-detail>span:last-child:not(:first-child){flex-shrink:0;font-family:var(--mono)}
+.loading-progress-note{margin:14px 0 0;font-size:11px;color:#bac6d6}
+.guide-window .loading-progress{position:static;width:100%;max-height:none;margin:16px 0}
+@keyframes loading-working{to{background-position:200% 0}}
+@media(max-width:700px){.loading-progress{left:12px;bottom:12px;width:calc(100% - 24px);padding:14px}.loading-progress-heading{flex-wrap:wrap;gap:4px;margin-bottom:10px}}
+@media(prefers-reduced-motion:reduce){.loading-progress progress:indeterminate::-webkit-progress-bar{animation:none}}
+/* Keep loading feedback above the floating catalog on narrow windows. */
+@media(max-width:980px){.workspace-loading .viewport-panel{z-index:8}}
 
 
 .vehicle-picker{position:relative;margin:0 14px 12px;flex-shrink:0;z-index:9;color:#e2e7ee;background:#202630;border:1px solid #3d4653}

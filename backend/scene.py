@@ -51,6 +51,7 @@ def build_scene(truck: dict, assets, cancelled=None, model_cache=None) -> dict:
 
     check_cancelled()
     parts, points, issues = [], [], []
+    progress = getattr(assets, "progress", None)
     accessories = truck["accessories"]
     catalog = assets.catalog()
     check_cancelled()
@@ -68,8 +69,25 @@ def build_scene(truck: dict, assets, cancelled=None, model_cache=None) -> dict:
     used_models = set()
     active_paint = next((a for a in accessories if a["category"] == "paint_job"), None)
     paint_color = active_paint["fields"].get("base_color") if active_paint else None
+    if progress:
+        progress("Preparing paint", "Reusing cached masks or importing the selected paint job.")
     paint_job = assets.paint_job(active_paint["dataPath"], cancelled=cancelled) if active_paint and hasattr(assets, "paint_job") else {}
     paint_fields = {**paint_job.get("fields", {}), **(active_paint["fields"] if active_paint else {})}
+    if hasattr(assets, "prepare_models"):
+        requests = set()
+        for accessory in accessories:
+            entry = by_path.get(accessory["dataPath"])
+            fields = accessory.get("fields", {})
+            key = accessory["dataPath"], fields.get("look"), fields.get("variant")
+            if entry and entry.get("model") and key not in models:
+                requests.add(key)
+            for attachment in accessory.get("slots", []):
+                hook = by_hook.get(attachment["hookup"])
+                if hook and hook.get("model") and (hook["path"], None, None) not in models:
+                    requests.add((hook["path"], None, None))
+        if requests:
+            assets.prepare_models(sorted(requests, key=lambda request: tuple(value or "" for value in request)), cancelled=cancelled)
+        check_cancelled()
 
     # A model conversion is shared by all save instances of the same definition.
     def model_for(entry, accessory=None):
@@ -137,9 +155,11 @@ def build_scene(truck: dict, assets, cancelled=None, model_cache=None) -> dict:
                               "model": hook_model, **compose(transform, locator)})
 
     # Cab and frame models use the truck's coordinate system. Attachments use local origins.
-    for accessory in sorted(accessories, key=lambda a: a["category"] not in ("chassis", "cabin")):
+    for index, accessory in enumerate(sorted(accessories, key=lambda a: a["category"] not in ("chassis", "cabin"))):
         check_cancelled()
         entry = by_path.get(accessory["dataPath"])
+        if progress:
+            progress("Loading fitted parts", (entry or {}).get("name", accessory["category"].replace("_", " ")), index, len(accessories))
         if not entry:
             issues.append(f'Definition unavailable: {accessory["dataPath"]}. Enable its local DLC/mod source to preview it.')
             continue
@@ -155,6 +175,8 @@ def build_scene(truck: dict, assets, cancelled=None, model_cache=None) -> dict:
         else:
             pending.append((accessory, model))
     # Resolve by name, in passes, so accessory-provided locators can host other parts.
+    if progress:
+        progress("Placing parts and attachments", "Matching parts to their mounting points.", len(accessories), len(accessories))
     while pending:
         check_cancelled()
         remaining = []
@@ -205,6 +227,8 @@ def build_scene(truck: dict, assets, cancelled=None, model_cache=None) -> dict:
             points.append({"name": name, "kind": "part", "category": available_category,
                            "accessoryId": item["id"] if item else None, **{key: mount[key] for key in IDENTITY}})
     check_cancelled()
+    if progress:
+        progress("Sending vehicle preview", f"{len(parts)} visible part instances.")
     for key in list(models):
         if key not in used_models:
             del models[key]

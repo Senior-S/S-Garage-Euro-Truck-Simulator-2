@@ -59,6 +59,15 @@ CATALOG = {path: {"path": path} for path in (
 
 
 class SaveTests(unittest.TestCase):
+    def test_source_snapshot_is_reused_and_still_detects_external_changes(self):
+        original = self.path.read_bytes()
+        self.path.write_bytes(original + b"\n")
+        with patch.object(Path, "read_bytes", side_effect=AssertionError("Reuse the bytes read for decryption")):
+            session = SaveSession(self.path, SOURCE, "test", "Test", source_data=original)
+        session.edit({"op": "duplicate", "accessoryId": "_nameless.6"}, CATALOG)
+        with self.assertRaisesRegex(ValueError, "changed outside"):
+            session.save()
+
     def test_multi_step_history_restores_snapshots_and_discards_redo_branch(self):
         for refund in ("100", "200", "300"):
             self.session.edit({"op": "fields", "accessoryId": "_nameless.5", "fields": {"refund": refund}}, CATALOG)

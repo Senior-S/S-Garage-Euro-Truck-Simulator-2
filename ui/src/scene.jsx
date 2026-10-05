@@ -12,11 +12,11 @@ function frameTruck(camera, controls, size, center) {
   camera.position.copy(center).add(new THREE.Vector3(distance * .56, size.y * .5 + distance * .31, -distance * .76))
 }
 
-export default function GarageScene({ onPick, onFailure, onIssues, markerLabel, selectedAccessoryId, selectedMarker, truckKey, sceneRevision, sessionId, truckId, cancelRef, lightMode = 'off', markerVisibility = 'all' }) {
+export default function GarageScene({ onPick, onFailure, onIssues, onLoading, markerLabel, selectedAccessoryId, selectedMarker, truckKey, sceneRevision, sessionId, truckId, cancelRef, lightMode = 'off', markerVisibility = 'all' }) {
   const host = React.useRef(null)
   const modelGroup = React.useRef(null)
   const runtime = React.useRef(null)
-  const callbacks = React.useRef({ onPick, onFailure, onIssues }); callbacks.current = { onPick, onFailure, onIssues }
+  const callbacks = React.useRef({ onPick, onFailure, onIssues, onLoading }); callbacks.current = { onPick, onFailure, onIssues, onLoading }
   const selectedRef = React.useRef(null); selectedRef.current = { id: selectedAccessoryId, marker: selectedMarker }
   const previewRef = React.useRef(null); previewRef.current = { lightMode, markerVisibility }
   const highlight = ({ id, marker }) => modelGroup.current?.traverse(object => {
@@ -121,9 +121,11 @@ export default function GarageScene({ onPick, onFailure, onIssues, markerLabel, 
     const cancel = () => {
       if (!live) return
       live = false; controller.abort()
+      callbacks.current.onLoading?.(requestId, false)
       fetch('/api/cancel-scene', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestId }), keepalive: true }).catch(error => callbacks.current.onFailure?.(`Scene cancellation failed: ${error.message}`))
     }
     if (cancelRef) cancelRef.current = cancel
+    callbacks.current.onLoading?.(requestId, true)
     setLoading(!current.initialized); setMarkerChoices(null)
     const update = async () => {
       const query = new URLSearchParams({ requestId, sessionId, truckId, revision: String(sceneRevision), sinceRevision: String(current.revision) })
@@ -152,7 +154,7 @@ export default function GarageScene({ onPick, onFailure, onIssues, markerLabel, 
       highlight(selectedRef.current); current.controls.update()
       callbacks.current.onIssues?.(data.issues || []); setLoading(false)
     }
-    update().catch(error => { if (live && error.name !== 'AbortError') { setLoading(false); callbacks.current.onFailure?.(error.message) } })
+    update().catch(error => { if (live && error.name !== 'AbortError') { setLoading(false); callbacks.current.onFailure?.(error.message) } }).finally(() => callbacks.current.onLoading?.(requestId, false))
     return () => { cancel(); if (cancelRef?.current === cancel) cancelRef.current = null }
   }, [truckKey, sceneRevision, sessionId, truckId])
   React.useEffect(() => {
@@ -160,5 +162,5 @@ export default function GarageScene({ onPick, onFailure, onIssues, markerLabel, 
     highlight(selectedRef.current)
     setMarkerChoices(null)
   }, [selectedAccessoryId, selectedMarker, markerVisibility, lightMode, truckKey])
-  return <><div ref={host} className="three-host" aria-label="Interactive truck model. Drag to orbit and scroll to zoom."/>{markerChoices && <div className="marker-picker" role="dialog" aria-label="Choose attachment point" style={{ left: markerChoices.x, top: markerChoices.y }}><div className="marker-picker-heading"><span>Choose attachment point</span><button aria-label="Close attachment chooser" onClick={() => setMarkerChoices(null)}>×</button></div><div className="marker-picker-options">{markerChoices.points.map((point, index) => <button key={index} onClick={() => { setMarkerChoices(null); callbacks.current.onPick?.(point) }}>{markerLabel(point)}</button>)}</div></div>}{loading && <div className="scene-wait"><span className="loading-pulse"/>ASSEMBLING SAVE GEOMETRY</div>}</>
+  return <><div ref={host} className="three-host" aria-label="Interactive truck model. Drag to orbit and scroll to zoom."/>{markerChoices && <div className="marker-picker" role="dialog" aria-label="Choose attachment point" style={{ left: markerChoices.x, top: markerChoices.y }}><div className="marker-picker-heading"><span>Choose attachment point</span><button aria-label="Close attachment chooser" onClick={() => setMarkerChoices(null)}>×</button></div><div className="marker-picker-options">{markerChoices.points.map((point, index) => <button key={index} onClick={() => { setMarkerChoices(null); callbacks.current.onPick?.(point) }}>{markerLabel(point)}</button>)}</div></div>}{loading && !onLoading && <div className="scene-wait"><span className="loading-pulse"/>ASSEMBLING SAVE GEOMETRY</div>}</>
 }

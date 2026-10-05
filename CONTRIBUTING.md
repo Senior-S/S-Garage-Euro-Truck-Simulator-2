@@ -6,7 +6,7 @@ For the ready-to-run app, use the **[Windows download](https://github.com/Senior
 
 Use Windows x64, Python 3.10 or newer, and Node.js 20 or newer. Download this repository with **Code → Download ZIP**, then extract it, or clone it with Git.
 
-Double-click **Start Garage.cmd**. It installs Python dependencies, builds the UI when necessary, downloads checksum-verified conversion tools, and opens the local garage. **Stop Garage.cmd** stops this source launcher's server. Internet access is needed for that initial setup.
+Double-click **Start Garage.cmd**. It installs Python dependencies, builds the UI when necessary, downloads checksum-verified ConverterPIX-SGarage and SII Decrypt tools when missing, and opens the local garage. **Stop Garage.cmd** stops this source launcher's server. Internet access is needed for that initial setup.
 
 For separate development terminals:
 

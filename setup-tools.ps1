@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 $toolDirectory = Join-Path $PSScriptRoot 'tools'
 New-Item -ItemType Directory -Force -Path $toolDirectory | Out-Null
 $toolDownloads = @(
-    @{ Name = 'converter_pix.exe'; Url = 'https://raw.githubusercontent.com/mwl4/ConverterPIX/3cd4e73a86d0c6bd28e117664c50a36cabeccf38/bin/win_x64/converter_pix.exe'; Hash = '60310EE8E01563145B71A8FB62F63D7A8B03906334E84E1463918F615F192ED2' },
+    @{ Name = 'converter_pix.exe'; Url = 'https://raw.githubusercontent.com/Senior-S/ConverterPIX-SGarage/ce70713952c93adafd651feb5b64e1078010b1d4/bin/win_x64/converter_pix.exe'; Hash = '3EB6104EB8B24EDB48A5E90E55D196849861D1E0D4302E7354036BC7E7EC5B9C' },
     @{ Name = 'SII_Decrypt.exe'; Url = 'https://raw.githubusercontent.com/TheLazyTomcat/SII_Decrypt/683e1d8addc96947967148a29a07e0859736a926/Program_Console/Lazarus/Release/win_x64/SII_Decrypt.exe'; Hash = '3AD9389B328AC47BD2D069068A94ABDB816ADAE26A777C33B627554882FEA45F' }
 )
 foreach ($tool in $toolDownloads) {

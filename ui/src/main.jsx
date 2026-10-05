@@ -12,10 +12,13 @@ import '@fontsource/ibm-plex-mono/latin-400.css'
 import '@fontsource/ibm-plex-mono/latin-500.css'
 import '@fontsource/ibm-plex-mono/latin-600.css'
 import { AlertTriangle, ArrowLeftRight, Check, ChevronDown, ChevronRight, CircleHelp, Clock3, Cloud, Cpu, Disc3, Eye, Filter, History, Layers3, Move3D, PanelLeftClose, Plus, RotateCcw, Save, Search, Settings2, SlidersHorizontal, Truck, Undo2, Redo2, RefreshCw, Container, X } from 'lucide-react'
-import GarageScene from './scene.jsx'
+import LoadingProgress from './loading-progress.jsx'
 import { paintHex, paintRgb } from './paint-color.js'
-import { AnimatedPartPreview, cachedThumbnail, cacheModel, cachedModel, clearModelCache, queuePreview, renderModelThumbnail } from './catalog-preview.jsx'
+import { cachedThumbnail, cacheModel, cachedModel, clearModelCache, queuePreview } from './preview-cache.js'
 import './style.css'
+
+const GarageScene = React.lazy(() => import('./scene.jsx'))
+const AnimatedPartPreview = React.lazy(() => import('./catalog-preview.jsx').then(module => ({ default: module.AnimatedPartPreview })))
 
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers } })
@@ -48,12 +51,13 @@ function App() {
   const [showDuplicates, setShowDuplicates] = React.useState(() => localStorage.getItem('yard.showDuplicates') === 'true')
   const [catalogLimit, setCatalogLimit] = React.useState(180)
   const [assetVersion, setAssetVersion] = React.useState(0)
+  const [loadingJobs, setLoadingJobs] = React.useState([]), [sceneLoading, setSceneLoading] = React.useState(null)
   const [advanced, setAdvanced] = React.useState(() => localStorage.getItem('yard.advanced') === 'true')
   const sceneCancel = React.useRef(null), truckSelectRequest = React.useRef(null), truckSelectSequence = React.useRef(0)
   const reportError = React.useCallback(message => setError(message), [])
   const activePart = state?.truck?.accessories?.find(a => a.id === selected) || state?.truck?.accessories?.[0]
-  const categories = [...new Set([...catalog, ...(state?.truck?.accessories || [])].map(item => item.category).filter(Boolean))].sort()
-  const brands = [...new Set(catalog.map(item => item.brand).filter(Boolean))].sort()
+  const categories = React.useMemo(() => [...new Set([...catalog, ...(state?.truck?.accessories || [])].map(item => item.category).filter(Boolean))].sort(), [catalog, state?.truck?.accessories])
+  const brands = React.useMemo(() => [...new Set(catalog.map(item => item.brand).filter(Boolean))].sort(), [catalog])
   const profiles = [...new Map(saves.map(save => [profileId(save), { id: profileId(save), name: save.profile || 'Profile' }])).values()]
   const profileSaves = saves.filter(save => profileId(save) === selectedProfile).sort((a, b) => new Date(b.modified || b.created || 0) - new Date(a.modified || a.created || 0))
   const activeSave = saves.find(save => save.id === state?.saveId)
@@ -65,18 +69,32 @@ function App() {
     setState(data)
     setSelected(current => data?.truck?.accessories?.some(p => p.id === data.editedAccessoryId) ? data.editedAccessoryId : data?.truck?.accessories?.some(p => p.id === current) ? current : data?.truck?.accessories?.[0]?.id || '')
   }, [])
+  const withProgress = React.useCallback(async (label, task) => {
+    const id = crypto.randomUUID()
+    setLoadingJobs(current => [...current, { id, label, startedAt: Date.now() }])
+    try { return await task(id) }
+    finally { setLoadingJobs(current => current.filter(job => job.id !== id)) }
+  }, [])
+  const onSceneLoading = React.useCallback((id, loading) => {
+    setSceneLoading(current => loading ? { id, label: 'Preparing vehicle preview', startedAt: Date.now() } : current?.id === id ? null : current)
+  }, [])
   const refresh = React.useCallback(async () => {
-    const [next, list] = await Promise.all([api('/api/status'), api('/api/saves')]); setStatus(next); setSaves(list)
+    const [next, list] = await withProgress('Finding game folders and saves', () => Promise.all([api('/api/status'), api('/api/saves')])); setStatus(next); setSaves(list)
     if (next.gamePath) setGamePath(next.gamePath)
     if (next.profilesPath) setProfilesPath(next.profilesPath)
     if (next.decryptorPath) setDecryptorPath(next.decryptorPath)
     if (next.toolPath) setToolPath(next.toolPath)
     if (next.cachePath) setCachePath(next.cachePath)
+    if (next.cacheMigrationRequired) {
+      applyState(null); setCatalog([]); setCatalogLoading(false)
+      return
+    }
     if (next.session) applyState(next.session)
     else applyState(null)
     setCatalogLoading(true)
-    try { setCatalog(await api('/api/catalog')) } finally { setCatalogLoading(false) }
-  }, [applyState])
+    // Resolve the selected save's mod sources before importing its catalog.
+    try { setCatalog(next.ready && next.session ? await withProgress('Loading parts catalog', id => api(`/api/catalog?requestId=${id}`)) : []) } finally { setCatalogLoading(false) }
+  }, [applyState, withProgress])
   React.useEffect(() => { refresh().catch(e => setError(e.message)) }, [refresh])
   React.useEffect(() => { if (!notice) return; const id = setTimeout(() => setNotice(''), 3600); return () => clearTimeout(id) }, [notice])
   React.useEffect(() => setCatalogLimit(180), [query, category, brand, Boolean(chosenSlot), showDuplicates])
@@ -116,6 +134,14 @@ function App() {
     finally { setBusy('') }
   }
   const revisionGuard = () => state ? { sessionId: state.sessionId, revision: state.revision } : {}
+  const rebuildCache = () => run('Rebuilding asset cache', async () => {
+    sceneCancel.current?.()
+    await clearModelCache(true)
+    await withProgress('Rebuilding asset cache', id => send(`/api/rebuild-cache?requestId=${id}`, { accepted: true }))
+    setAssetVersion(value => value + 1)
+    await refresh()
+    setNotice('Asset cache rebuilt')
+  })
   const requestModel = React.useCallback(async (path, signal) => {
     signal.throwIfAborted()
     if (path.startsWith('[')) {
@@ -161,6 +187,8 @@ function App() {
         if (currentSignal.aborted) throw new DOMException('Preview cancelled', 'AbortError')
         cacheModel(path, model)
       }
+      const { renderModelThumbnail } = await import('./catalog-preview.jsx')
+      currentSignal.throwIfAborted()
       return renderModelThumbnail(model, currentSignal, width, height, key)
     }, signal)
   }, [status?.previewVersion, requestModel])
@@ -168,13 +196,13 @@ function App() {
     if (state?.dirty && !window.confirm('This save has unsaved changes. Discard them and open another save?')) return
     return run('Opening save', async () => {
       sceneCancel.current?.()
-      const next = await send('/api/load', { saveId: id }); applyState(next)
+      const next = await withProgress('Opening save', requestId => send(`/api/load?requestId=${requestId}`, { saveId: id })); applyState(next)
       clearModelCache(); setAssetVersion(value => value + 1)
       const save = saves.find(item => item.id === id)
       if (save) { setSelectedProfile(profileId(save)); setSelectedSaveId(id) }
       setCatalogLoading(true)
       try {
-        const [updatedStatus, updatedCatalog] = await Promise.all([api('/api/status'), api('/api/catalog')])
+        const [updatedStatus, updatedCatalog] = await Promise.all([api('/api/status'), withProgress('Loading parts catalog', requestId => api(`/api/catalog?requestId=${requestId}`))])
         setStatus(updatedStatus); setCatalog(updatedCatalog)
       } finally { setCatalogLoading(false) }
       setNotice('Save opened'); return next
@@ -202,6 +230,7 @@ function App() {
   const history = (direction, steps = 1) => { sceneCancel.current?.(); return run(direction === 'undo' ? 'Undoing' : 'Redoing', () => send(`/api/${direction}`, { ...revisionGuard(), steps })) }
   React.useEffect(() => {
     const onKey = e => {
+      if (status?.cacheMigrationRequired) return
       const target = e.target
       if (target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); if (state?.canUndo) history('undo') }
@@ -209,7 +238,7 @@ function App() {
       if (e.key === 'Escape') { setSettings(false); setHistoryOpen(false); setError('') }
     }
     window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey)
-  }, [state?.canUndo, state?.canRedo])
+  }, [state?.canUndo, state?.canRedo, status?.cacheMigrationRequired])
   React.useEffect(() => {
     if (!state?.dirty) return
     const before = e => { e.preventDefault(); e.returnValue = '' }
@@ -260,6 +289,7 @@ function App() {
       const updated = await send('/api/config', { gamePath, profilesPath, decryptorPath, toolPath, cachePath }); setStatus(updated); applyState(updated.session || null); clearModelCache(); setAssetVersion(value => value + 1)
       setGamePath(updated.gamePath || gamePath); setProfilesPath(updated.profilesPath || profilesPath); setDecryptorPath(updated.decryptorPath || decryptorPath); setToolPath(updated.toolPath || toolPath); setCachePath(updated.cachePath)
       setSettings(false); setNotice(updated.message || 'Folders updated')
+      if (updated.cacheMigrationRequired) { setCatalog([]); setCatalogLoading(false); return null }
       setCatalogLoading(true)
       try { const [list, defs] = await Promise.all([api('/api/saves'), api('/api/catalog')]); setSaves(list); setCatalog(defs) }
       finally { setCatalogLoading(false) }
@@ -281,8 +311,8 @@ function App() {
       <div className="brand-lockup"><span className="brand-mark"><Truck size={19} strokeWidth={1.8}/></span><span className="brand-word">S Garage <span>/</span></span><span className="brand-caption">ETS2</span></div>
       <div className="top-divider" />
       <div className="source-selects">
-        <div className="profile-select"><span className="eyebrow">Profile</span><label><select aria-label="Select profile" value={selectedProfile} onChange={e => selectProfile(e.target.value)}><option value="">Choose profile…</option>{profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select><ChevronDown size={14}/></label></div>
-        <div className="save-select"><span className="eyebrow">Save file</span><label><select aria-label="Select save" value={profileSaves.some(save => save.id === selectedSaveId) ? selectedSaveId : ''} onChange={e => e.target.value && loadSave(e.target.value)}><option value="">{profileSaves.length ? 'Choose a save…' : 'No saves in profile'}</option>{profileSaves.map(save => <option key={save.id} value={save.id}>{save.name} · {dateLabel(save.modified || save.created)}</option>)}</select><ChevronDown size={14}/></label></div>
+        <div className="profile-select"><span className="eyebrow">Profile</span><label><select disabled={!!busy} aria-label="Select profile" value={selectedProfile} onChange={e => selectProfile(e.target.value)}><option value="">Choose profile…</option>{profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select><ChevronDown size={14}/></label></div>
+        <div className="save-select"><span className="eyebrow">Save file</span><label><select disabled={!!busy} aria-label="Select save" value={profileSaves.some(save => save.id === selectedSaveId) ? selectedSaveId : ''} onChange={e => e.target.value && loadSave(e.target.value)}><option value="">{profileSaves.length ? 'Choose a save…' : 'No saves in profile'}</option>{profileSaves.map(save => <option key={save.id} value={save.id}>{save.name} · {dateLabel(save.modified || save.created)}</option>)}</select><ChevronDown size={14}/></label></div>
         <button className="icon-button refresh-saves" aria-label="Refresh saves" title="Refresh profiles and saves" disabled={!!busy} onClick={() => run('Refreshing saves', async () => { const list = await api('/api/saves'); setSaves(list); setNotice(`Save list refreshed. ${list.length} saves found.`) })}><RefreshCw size={16} className={busy === 'Refreshing saves' ? 'refresh-spinning' : ''}/></button>
       </div>
       <div className="top-meta"><span className={`live-dot ${status?.ready ? 'ready' : ''}`} /><span>{status?.ready ? 'Save scanner ready' : 'Checking local files'}</span><span className="meta-sep">·</span><span>{saves.length} saves</span></div>
@@ -291,7 +321,7 @@ function App() {
       <button className="save-button" onClick={save} disabled={!state?.dirty || !!busy}><Save size={15}/><span>{busy === 'Writing save' ? 'Saving…' : 'Save changes'}</span>{state?.dirty && <i/>}</button>
     </header>
 
-    <main className={`workspace ${catalogOpen ? '' : 'catalog-is-closed'}`}>
+    <main className={`workspace ${loadingJobs.length || sceneLoading ? 'workspace-loading' : ''} ${catalogOpen ? '' : 'catalog-is-closed'}`}>
       <aside className="installed-panel">
         <div className="panel-heading"><div><div className="eyebrow">Garage</div><h1>Installed parts</h1></div><span className="count-pill">{state?.truck?.accessories?.length ?? '—'}</span></div>
         {state?.trucks?.length > 0 && <details className="vehicle-picker" ref={vehiclePicker} key={state.sessionId} onKeyDown={event => { if (event.key === 'Escape') { event.currentTarget.removeAttribute('open'); event.currentTarget.querySelector('summary').focus() } }}>
@@ -319,7 +349,7 @@ function App() {
 
       <section className="viewport-panel">
         <div className="viewport-header"><div><span className="eyebrow">{state?.truck?.kind === 'trailer' ? 'Trailer model' : 'Truck model'}</span><h2>{state?.truck?.name || 'Truck inspection'}</h2>{advanced && state?.truck?.brand && <span className="truck-make">{state.truck.brand}</span>}</div><div className="preview-controls">{paintPart && <button className="paint-open" onClick={() => { setSelected(paintPart.id); setSelectedMarker(null); setChosenSlot(''); setMountPoint(null); setCategory('paint_job'); setBrand(state.truck.brand); setQuery(''); setCatalogOpen(true) }}>Paint</button>}<label>Lights<select aria-label="Preview lights" value={lightMode} onChange={event => setLightMode(event.target.value)}><option value="off">Off</option><option value="low">Low</option><option value="high">High</option></select></label><label>Markers<select aria-label="Marker visibility" value={markerVisibility} onChange={event => setMarkerVisibility(event.target.value)}><option value="all">All</option><option value="selected">Selected only</option><option value="hidden">Hidden</option></select></label></div></div>
-        <div className="scene-wrap">{state?.truck ? <GarageScene lightMode={lightMode} markerVisibility={markerVisibility} key={`${state.sessionId}:${state.truck.id}`} truckKey={`${state.sessionId}:${state.truck.id}`} sceneRevision={state.revision} sessionId={state.sessionId} truckId={state.truck.id} cancelRef={sceneCancel} selectedAccessoryId={activePart?.id} selectedMarker={selectedMarker} markerLabel={point => point.kind === 'hookup' ? `${friendlyCategory(state.truck.accessories.find(part => part.id === point.accessoryId)?.category)} / ${friendlySlot(point.name)}` : friendlyCategory(point.category || point.name)} onPick={point => {
+        <div className="scene-wrap">{state?.truck ? <React.Suspense fallback={<div className="scene-wait" role="status">Loading the 3D viewer...</div>}><GarageScene onLoading={onSceneLoading} lightMode={lightMode} markerVisibility={markerVisibility} key={`${state.sessionId}:${state.truck.id}`} truckKey={`${state.sessionId}:${state.truck.id}`} sceneRevision={state.revision} sessionId={state.sessionId} truckId={state.truck.id} cancelRef={sceneCancel} selectedAccessoryId={activePart?.id} selectedMarker={selectedMarker} markerLabel={point => point.kind === 'hookup' ? `${friendlyCategory(state.truck.accessories.find(part => part.id === point.accessoryId)?.category)} / ${friendlySlot(point.name)}` : friendlyCategory(point.category || point.name)} onPick={point => {
           setSelectedMarker(point.kind ? point : null)
           const part = state.truck.accessories.find(item => item.id === point.accessoryId)
           const nextCategory = point.kind === 'hookup' ? 'hookup' : part?.category || point.category || 'all'
@@ -327,9 +357,10 @@ function App() {
           if (point.kind === 'hookup') { setSelected(point.accessoryId); setChosenSlot(point.name); setMountPoint(null); setMode('add') }
           else if (point.kind === 'part') { setChosenSlot(''); if (point.accessoryId) { setSelected(point.accessoryId); setMountPoint(null); setMode('replace') } else { setMountPoint(point); setMode('add') } }
           else if (point.accessoryId) { setSelected(point.accessoryId); setChosenSlot(''); setMountPoint(null); setMode('replace') }
-        }} onFailure={reportError} onIssues={setSceneIssues} /> : <div className="scene-empty"><div className="scan-glyph"><Truck size={39}/><span/></div><b>Waiting for a truck</b><p>Open a save to inspect the truck geometry from your game files.</p></div>}
+        }} onFailure={reportError} onIssues={setSceneIssues} /></React.Suspense> : <div className="scene-empty"><div className="scan-glyph"><Truck size={39}/><span/></div><b>Waiting for a truck</b><p>Open a save to inspect the truck geometry from your game files.</p></div>}
           <div className="scene-vignette"/>{advanced && <div className="scene-label"><span className="scene-live"/> GEOMETRY STREAM <span className="scene-label-sep">·</span> MODEL DATA</div>}
-          {busy && <div className="scene-loading"><span className="loading-pulse"/>{busy}</div>}
+          {!guideOpen && <LoadingProgress requests={[...loadingJobs, ...(sceneLoading ? [sceneLoading] : [])]}/>}
+          {busy && !loadingJobs.length && !sceneLoading && <div className="scene-loading"><span className="loading-pulse"/>{busy}</div>}
         </div>
         {shownIssues.length > 0 && <div className="issue-strip"><AlertTriangle size={14}/><span>{advanced ? shownIssues.join(' · ') : `${shownIssues.length} preview issues. Enable Advanced view for details.`}</span></div>}
       </section>
@@ -341,8 +372,8 @@ function App() {
           <div className="filter-row"><label><Filter size={13}/><select aria-label="Filter category" value={category} onChange={e => setCategory(e.target.value)}><option value="all">All categories</option>{categories.map(c => <option key={c} value={c}>{friendlyCategory(c)}</option>)}</select><ChevronDown size={12}/></label><label><select aria-label="Filter brand" disabled={category === 'paint_job'} value={category === 'paint_job' ? state?.truck?.brand || brand : brand} onChange={e => setBrand(e.target.value)}><option value="all">All makes</option>{brands.map(b => <option key={b} value={b}>{brandLabel(b)}</option>)}</select><ChevronDown size={12}/></label></div>
           {(chosenSlot || mountPoint) && <div className="target-chip"><span className="slot-lamp"/> Target: {friendlySlot(chosenSlot || mountPoint?.name || 'Mount point')}<button aria-label="Clear selected attachment point" onClick={() => { setSelectedMarker(null); setChosenSlot(''); setMountPoint(null) }}><X size={12}/></button></div>}
           <div className="catalog-result-line"><span>{filtered.length.toLocaleString()} parts</span><label className="duplicates-toggle"><input type="checkbox" checked={showDuplicates} onChange={e => setShowDuplicates(e.target.checked)}/> Show duplicates</label></div>
-          <div className="catalog-grid" key={JSON.stringify([assetVersion, category, query, brand, Boolean(chosenSlot), showDuplicates, previewCab?.dataPath, previewCab?.fields.look, previewCab?.fields.variant])}>{filtered.slice(0, catalogLimit).map((item, index) => <CatalogCard key={item.path} item={item} index={index} advanced={advanced} previewPath={item.paintFields?.paint_job_mask && previewCab ? JSON.stringify([previewCab.dataPath, previewCab.fields.look || null, previewCab.fields.variant || null, item.path]) : item.path} onChoose={() => applyDefinition(item)} onFailure={reportError} loadModel={loadModel} loadThumbnail={loadThumbnail} />)}{filtered.length === 0 && <div className="no-results"><Search size={21}/><span>{chosenSlot ? 'No hookup definitions match this search.' : category === 'paint_job' && paintsLoading ? 'Loading paint jobs...' : 'No parts match this filter.'}</span></div>}{filtered.length > catalogLimit && <button className="load-more" onClick={() => setCatalogLimit(limit => limit + 180)}>Show next {Math.min(180, filtered.length - catalogLimit)} parts <ChevronDown size={13}/></button>}</div>
-          <div className="catalog-foot"><span><span className={`small-status-dot ${catalogLoading ? 'loading-dot' : ''}`}/>{catalogLoading ? 'IMPORTING GAME ASSETS' : 'CATALOG FROM GAME DATA'}</span><span>{filtered.length > catalogLimit ? `Showing ${catalogLimit} of ` : ''}{filtered.length}</span></div>
+          <div className="catalog-grid" key={JSON.stringify([assetVersion, category, query, brand, Boolean(chosenSlot), showDuplicates, previewCab?.dataPath, previewCab?.fields.look, previewCab?.fields.variant])}>{filtered.slice(0, catalogLimit).map((item, index) => <CatalogCard paused={!!busy || loadingJobs.length > 0 || catalogLoading || !!sceneLoading} key={item.path} item={item} index={index} advanced={advanced} previewPath={item.paintFields?.paint_job_mask && previewCab ? JSON.stringify([previewCab.dataPath, previewCab.fields.look || null, previewCab.fields.variant || null, item.path]) : item.path} onChoose={() => applyDefinition(item)} onFailure={reportError} loadModel={loadModel} loadThumbnail={loadThumbnail} />)}{filtered.length === 0 && <div className="no-results"><Search size={21}/><span>{!state ? 'Open a save to load its game parts.' : catalogLoading ? 'Loading the parts catalog...' : chosenSlot ? 'No hookup definitions match this search.' : category === 'paint_job' && paintsLoading ? 'Loading paint jobs...' : 'No parts match this filter.'}</span></div>}{filtered.length > catalogLimit && <button className="load-more" onClick={() => setCatalogLimit(limit => limit + 180)}>Show next {Math.min(180, filtered.length - catalogLimit)} parts <ChevronDown size={13}/></button>}</div>
+          <div className="catalog-foot"><span><span className={`small-status-dot ${catalogLoading ? 'loading-dot' : ''}`}/>{catalogLoading ? 'IMPORTING GAME ASSETS' : !state ? 'WAITING FOR A SAVE' : 'CATALOG FROM GAME DATA'}</span><span>{filtered.length > catalogLimit ? `Showing ${catalogLimit} of ` : ''}{filtered.length}</span></div>
         </>}
       </aside>
     </main>
@@ -350,17 +381,32 @@ function App() {
     <footer className="statusbar"><div className="history-actions"><button disabled={!state?.canUndo || !!busy} onClick={() => history('undo')} title="Undo (Ctrl+Z)"><Undo2 size={15}/> Undo</button><button disabled={!state?.canRedo || !!busy} onClick={() => history('redo')} title="Redo (Ctrl+Y)"><Redo2 size={15}/> Redo</button><span className="history-separator"/><button disabled={!state} onClick={() => setHistoryOpen(true)}><History size={13}/> History{advanced && ` ? ${state?.revision ?? 0}`}</button></div><div className="status-save"><span className={`dirty-marker ${state?.dirty ? 'is-dirty' : ''}`}/><span>{state?.dirty ? 'Unsaved changes' : state ? 'All changes saved' : 'No session'}</span>{activeSave && <><span className="history-separator"/><Clock3 size={13}/><span>{dateLabel(activeSave.modified || activeSave.created)}</span>{advanced && activeSave.format && <span>{activeSave.format}</span>}</>}</div><div className="status-right"><span><Cloud size={14}/> Local only</span><span className="history-separator"/><button onClick={() => setGuideOpen(true)}><CircleHelp size={14}/> Getting started</button><span className="history-separator"/><button onClick={() => setSettings(true)}>Folders</button></div></footer>
     {(error || notice) && <div role="status" className={`toast ${error ? 'toast-error' : ''}`}><span>{error || notice}</span><button onClick={() => { setError(''); setNotice('') }} aria-label="Dismiss message"><X size={15}/></button></div>}
     {historyOpen && <HistoryWindow state={state} busy={!!busy} history={history} onClose={() => setHistoryOpen(false)}/>}
-    {guideOpen && <GettingStarted onClose={() => { localStorage.setItem('yard.guideSeen', 'true'); setGuideOpen(false) }} onFolders={() => { localStorage.setItem('yard.guideSeen', 'true'); setGuideOpen(false); setSettings(true) }}/>}
+    {status?.cacheMigrationRequired && <CacheRebuildNotice busy={!!busy} error={error} loadingRequests={loadingJobs} onAccept={rebuildCache}/>}
+    {guideOpen && status && !status.cacheMigrationRequired && <GettingStarted loadingRequests={[...loadingJobs, ...(sceneLoading ? [sceneLoading] : [])]} onClose={() => { localStorage.setItem('yard.guideSeen', 'true'); setGuideOpen(false) }} onFolders={() => { localStorage.setItem('yard.guideSeen', 'true'); setGuideOpen(false); setSettings(true) }}/>}
     {settings && <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && closeSettings()}><section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><div className="modal-top"><div><div className="eyebrow">LOCAL CONNECTION</div><h2 id="settings-title">Game folders</h2></div><button className="icon-button" onClick={closeSettings} aria-label="Close settings"><X size={17}/></button></div><p className="modal-copy">Point S Garage at your Euro Truck Simulator 2 install and profile directory. Your save stays on this PC. Click Save folders to keep changes for the next launch.</p><label className="path-field"><span>GAME INSTALL DIRECTORY</span><input value={gamePath} onChange={e => setGamePath(e.target.value)} placeholder="C:\\Program Files (x86)\\Steam\\steamapps\\common\\Euro Truck Simulator 2"/></label><label className="path-field"><span>PROFILES DIRECTORY</span><input value={profilesPath} onChange={e => setProfilesPath(e.target.value)} placeholder="Documents\\Euro Truck Simulator 2\\profiles"/></label><label className="path-field"><span>CACHE FOLDER</span><input value={cachePath} onChange={e => setCachePath(e.target.value)} placeholder="Folder for imported game data"/></label><p className="modal-copy">Imported models and textures are stored here. Changing this folder rebuilds the cache as you browse. Existing files stay in the old folder. Settings stay in AppData\Local\ETS2Garage.</p><label className="path-field"><span>CONVERTERPIX TOOL</span><input value={toolPath} onChange={e => setToolPath(e.target.value)} placeholder="Path to converter_pix.exe"/></label><label className="path-field"><span>DECRYPTOR TOOL (OPTIONAL)</span><input value={decryptorPath} onChange={e => setDecryptorPath(e.target.value)} placeholder="Path to a compatible save decryptor executable"/></label><div className="detected-path"><span className={`small-status-dot ${status?.ready ? '' : 'off'}`}/><span>{status?.message || status?.toolPath || status?.decryptorPath || 'Waiting for folder scan'}</span></div><div className="modal-actions"><button className="text-button" onClick={() => setSettings(false)}>CANCEL</button><button className="save-button" onClick={saveConfig} disabled={!!busy}><Check size={15}/> Save folders</button></div></section></div>}
   </div>
 }
 
-function GettingStarted({ onClose, onFolders }) {
+function CacheRebuildNotice({ onAccept, busy, error, loadingRequests }) {
+  const dialog = React.useRef(null)
+  React.useEffect(() => { dialog.current.showModal() }, [])
+  return <dialog ref={dialog} className="guide-window cache-rebuild-window" onCancel={event => event.preventDefault()} aria-labelledby="cache-rebuild-title" aria-describedby="cache-rebuild-copy" aria-busy={busy}>
+    <div className="modal-top"><h2 id="cache-rebuild-title">Your asset cache needs rebuilding</h2></div>
+    <p id="cache-rebuild-copy">S Garage now uses a new asset cache format. Accept to remove the old imported assets and load a fresh cache. This can take a few minutes on a hard disk.</p>
+    <p>Your saves and settings stay intact. Models will rebuild as you open vehicles and browse parts.</p>
+    <LoadingProgress requests={loadingRequests}/>
+    {error && <p className="cache-rebuild-error" role="alert">{error}</p>}
+    <div className="modal-actions"><button className="save-button" autoFocus disabled={busy} onClick={onAccept}><Check size={15}/>{busy ? 'Rebuilding cache...' : error ? 'Retry rebuild' : 'Accept and rebuild'}</button></div>
+  </dialog>
+}
+
+function GettingStarted({ onClose, onFolders, loadingRequests }) {
   const dialog = React.useRef(null)
   React.useEffect(() => { dialog.current.showModal() }, [])
   return <dialog ref={dialog} className="guide-window" onCancel={onClose} aria-labelledby="guide-title">
     <div className="modal-top"><div><div className="eyebrow">GETTING STARTED</div><h2 id="guide-title">Bring your truck into S Garage</h2></div><button className="icon-button" onClick={onClose} aria-label="Close guide"><X size={17}/></button></div>
     <p>A profile is your ETS2 career, with its trucks, drivers and progress. Each save is a snapshot of that profile at a particular time. Choose a profile first, then the save you want to edit.</p>
+    <LoadingProgress requests={loadingRequests}/>
     <div className="guide-cloud"><Cloud size={20}/><div><h3>Use a local profile</h3><p>S Garage only supports profiles with Steam Cloud disabled. Disable Steam Cloud for the profile you want to edit, then make a new manual save in ETS2.</p></div></div>
     <ol>
       <li><h3>Turn off Steam Cloud for your profile</h3><p>In ETS2's profile selection screen, select your profile, choose Edit, disable Use Steam Cloud and apply the change.</p><a href="https://www.youtube.com/watch?v=e2aYdREZX4M" target="_blank" rel="noreferrer">Watch the profile setup video <ChevronRight size={14}/></a><p className="guide-note">This video is for another tool, but explains the same local profile setup.</p></li>
@@ -411,12 +457,12 @@ function PaintControls({ part, busy, edit, onFailure }) {
   </div>
 }
 
-function CatalogCard({ item, index, advanced, previewPath, onChoose, onFailure, loadModel, loadThumbnail }) {
+function CatalogCard({ paused, item, index, advanced, previewPath, onChoose, onFailure, loadModel, loadThumbnail }) {
   const card = React.useRef(null), hoverRequest = React.useRef(null)
   const [preview, setPreview] = React.useState(''), [hoveredModel, setHoveredModel] = React.useState(null), [failed, setFailed] = React.useState(false)
   const canPreview = !!item.model || previewPath !== item.path
   React.useEffect(() => {
-    if (!canPreview || !card.current) return
+    if (!canPreview || paused || !card.current || preview) return
     let controller
     let completed = false
     const observer = new IntersectionObserver(entries => {
@@ -432,11 +478,12 @@ function CatalogCard({ item, index, advanced, previewPath, onChoose, onFailure, 
     }, { root: document.querySelector('.catalog-grid'), rootMargin: '0px' })
     observer.observe(card.current)
     return () => { observer.disconnect(); controller?.abort() }
-  }, [canPreview, previewPath, item.name, loadThumbnail, onFailure])
+  }, [canPreview, paused, preview, previewPath, item.name, loadThumbnail, onFailure])
   React.useEffect(() => () => hoverRequest.current?.abort(), [])
   const hideRotation = React.useCallback(() => { hoverRequest.current?.abort(); hoverRequest.current = null; setHoveredModel(null) }, [])
+  React.useEffect(() => { if (paused) hideRotation() }, [paused, hideRotation])
   const showRotation = () => {
-    if (!canPreview) return
+    if (!canPreview || paused) return
     hoverRequest.current?.abort()
     const controller = new AbortController(); hoverRequest.current = controller
     const cached = cachedModel(previewPath)
@@ -446,7 +493,7 @@ function CatalogCard({ item, index, advanced, previewPath, onChoose, onFailure, 
     }).catch(error => { if (error.name !== 'AbortError') { setFailed(true); onFailure(`${item.name}: ${error.message}`) } })
   }
   return <button ref={card} className="catalog-card" onClick={onChoose} style={{ '--card-delay': `${Math.min(index % 14, 13) * 12}ms` }} title={advanced ? `${item.name} · ${item.path}` : item.name}>
-    <span className="card-image" onPointerEnter={showRotation} onPointerLeave={hideRotation} onPointerCancel={hideRotation}>{item.paintFields && !canPreview ? <span className="paint-swatch" style={{ backgroundColor: paintHex(item.paintFields.base_color) }}><span>{["mask_r_color", "mask_g_color", "mask_b_color"].filter(key => item.paintFields[key]).map(key => <i key={key} style={{ backgroundColor: paintHex(item.paintFields[key]) }}/>)}</span></span> : hoveredModel ? <AnimatedPartPreview model={hoveredModel} label={item.name} onFailure={onFailure} onLeave={hideRotation}/> : preview ? <img src={preview} loading="lazy" alt=""/> : item.iconUrl ? <img src={item.iconUrl} loading="lazy" alt=""/> : <span className={`part-blueprint ${canPreview ? '' : 'text-only'}`}><span>{failed ? 'Preview unavailable' : canPreview ? 'Loading model' : 'No 3D model'}</span><i/></span>}</span>
+    <span className="card-image" onPointerEnter={showRotation} onPointerLeave={hideRotation} onPointerCancel={hideRotation}>{item.paintFields && !canPreview ? <span className="paint-swatch" style={{ backgroundColor: paintHex(item.paintFields.base_color) }}><span>{["mask_r_color", "mask_g_color", "mask_b_color"].filter(key => item.paintFields[key]).map(key => <i key={key} style={{ backgroundColor: paintHex(item.paintFields[key]) }}/>)}</span></span> : hoveredModel ? <React.Suspense fallback={<span className="part-blueprint"><span>Loading preview</span></span>}><AnimatedPartPreview model={hoveredModel} label={item.name} onFailure={onFailure} onLeave={hideRotation}/></React.Suspense> : preview ? <img src={preview} loading="lazy" alt=""/> : item.iconUrl ? <img src={item.iconUrl} loading="lazy" alt=""/> : <span className={`part-blueprint ${canPreview ? '' : 'text-only'}`}><span>{failed ? 'Preview unavailable' : canPreview ? 'Loading model' : 'No 3D model'}</span><i/></span>}</span>
     <span className="card-copy"><b>{item.name}</b><small>{friendlyCategory(item.category || 'Game part')}{advanced && item.brand ? ` · ${item.brand}` : ''}</small>{advanced && <small className="card-internal">{item.unitId || item.path}</small>}</span>
     <span className="card-add"><Plus size={15}/></span>
   </button>
