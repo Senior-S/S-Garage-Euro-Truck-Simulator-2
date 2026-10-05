@@ -342,10 +342,17 @@ class Handler(BaseHTTPRequestHandler):
                         cancelled = garage.model_requests.setdefault(request_id, threading.Event())
                         while len(garage.model_requests) > 256:
                             garage.model_requests.pop(next(iter(garage.model_requests)))
-                paint = garage.assets.paint_job(entry["path"], textures=preview, include_overrides=False, cancelled=cancelled.is_set if cancelled else None)
+                accessory_path = query.get("accessoryPath", [None])[0] if preview else None
+                accessory = garage.assets.definition(accessory_path) if accessory_path else None
+                if accessory_path and not accessory:
+                    raise ValueError("Choose an installed part to preview this paint job.")
+                accessory_key = f'{accessory["category"]}.{accessory["unitId"].split(".")[0]}' if accessory else None
+                paint = garage.assets.paint_job(entry["path"], textures=preview, include_overrides=accessory is not None,
+                                                accessory_key=accessory_key, cancelled=cancelled.is_set if cancelled else None)
                 if preview:
                     fields = paint["fields"]
-                    material = paint_material(_numbers(fields.get("base_color", "(1,1,1)"))[:3], fields, paint.get("texture"))
+                    texture = paint.get("overrides", {}).get(accessory_key) or paint.get("texture")
+                    material = paint_material(_numbers(fields.get("base_color", "(1,1,1)"))[:3], fields, texture)
                     paint = {**paint, "material": material}
                 self.json_response(paint)
             elif parsed.path == "/api/paints":

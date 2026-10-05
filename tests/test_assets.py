@@ -118,6 +118,37 @@ Path: "folder\\"
                 with self.assertRaises(CancelledError):
                     store.paint_job(path, cancelled=lambda: True, include_overrides=False)
 
+    def test_paint_preview_imports_only_selected_accessory_and_shares_mask_exports(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = AssetStore(cache_path=Path(temp))
+            path = "/def/vehicle/trailer_owned/test/paint_job/test.sii"
+            store._catalog = [{"path": path, "sourcePath": path, "unitId": "test.paint_job"}]
+            definition = store.cache_path / "catalog" / store._fingerprint() / path.lstrip("/")
+            definition.parent.mkdir(parents=True)
+            definition.write_text('accessory_paint_job_data : test.paint_job {\npaint_job_mask: "/fallback.tobj"\nairbrush: true\n}')
+            overrides = definition.parent / "accessory" / definition.name
+            overrides.parent.mkdir()
+            overrides.write_text('simple_paint_job_data : .a {\npaint_job_mask: "/curtain.tobj"\nacc_list[]: "body.curtain_136"\nacc_list[]: "body.curtain_78"\n}\nsimple_paint_job_data : .b {\npaint_job_mask: "/dryvan.tobj"\nacc_list[]: "body.dry_van_136"\n}')
+            def export(arguments, **kwargs):
+                target = Path(arguments[1]) / arguments[3].lstrip("/").replace(".tobj", ".png")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                Image.new("RGBA", (1, 1), (255, 0, 0, 255)).save(target)
+            with patch.object(store, "_run", side_effect=export) as run:
+                selected = store.paint_job(path, accessory_key="body.curtain_136")
+                self.assertEqual(set(selected["overrides"]), {"body.curtain_136"})
+                self.assertEqual([call.args[0][3] for call in run.call_args_list], ["/fallback.tobj", "/curtain.tobj"])
+                self.assertIs(store.paint_job(path, accessory_key="body.curtain_136"), selected)
+                other = store.paint_job(path, accessory_key="body.curtain_78")
+                self.assertEqual(set(other["overrides"]), {"body.curtain_78"})
+                self.assertEqual(other["overrides"]["body.curtain_78"], selected["overrides"]["body.curtain_136"])
+                unknown = store.paint_job(path, accessory_key="body.unknown")
+                self.assertEqual(unknown["overrides"], {})
+                self.assertEqual(unknown["texture"], selected["texture"])
+                self.assertEqual(run.call_count, 2)
+                complete = store.paint_job(path)
+                self.assertEqual(set(complete["overrides"]), {"body.curtain_136", "body.curtain_78", "body.dry_van_136"})
+                self.assertEqual(run.call_count, 3)
+
     def test_packed_light_mask_preserves_rgb_when_alpha_is_zero(self):
         with tempfile.TemporaryDirectory() as temp:
             export = Path(temp) / "models" / "test"

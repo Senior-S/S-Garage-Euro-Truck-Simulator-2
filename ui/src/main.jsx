@@ -167,7 +167,7 @@ function App() {
   const requestModel = React.useCallback(async (path, signal) => {
     signal.throwIfAborted()
     if (path.startsWith('[')) {
-      // Paint preview keys include the selected cab, but all paints share its cached geometry.
+      // Paint previews share the selected part's cached geometry.
       const [cabPath, look, variant, paintPath] = JSON.parse(path)
       const cabKey = JSON.stringify([cabPath, look, variant])
       let cab = cachedModel(cabKey)
@@ -175,14 +175,14 @@ function App() {
         cab = await requestModel(`${cabPath}?${new URLSearchParams({ ...(look ? { look } : {}), ...(variant ? { variant } : {}) })}`, signal)
         cacheModel(cabKey, cab)
       }
-      const paint = await requestModel(`${paintPath}?preview=1`, signal)
+      const paint = await requestModel(`${paintPath}?${new URLSearchParams({ preview: '1', accessoryPath: cabPath })}`, signal)
       return { ...cab, paintPreview: true, pieces: cab.pieces.map(piece => piece.material?.paintable ? { ...piece, material: { ...piece.material, ...paint.material } } : piece) }
     }
     const [definitionPath, parameters = ''] = path.split('?')
     const requestId = crypto.randomUUID()
     const cancel = () => { send('/api/cancel-model', { requestId }).catch(error => reportError(error.message)) }
     signal.addEventListener('abort', cancel, { once: true })
-    try { return await api(`/api/${parameters === "preview=1" ? "paint" : "model"}?path=${encodeURIComponent(definitionPath)}&requestId=${requestId}&${parameters}`, { signal }) }
+    try { return await api(`/api/${new URLSearchParams(parameters).get('preview') === '1' ? 'paint' : 'model'}?path=${encodeURIComponent(definitionPath)}&requestId=${requestId}&${parameters}`, { signal }) }
     finally { signal.removeEventListener('abort', cancel) }
   }, [reportError])
   const loadModel = React.useCallback((path, signal) => {
@@ -198,7 +198,7 @@ function App() {
     }, signal, true)
   }, [requestModel])
   const loadThumbnail = React.useCallback(async (path, signal, width, height) => {
-    const key = status?.previewVersion ? new URL(`/__catalog_preview/${encodeURIComponent(status.previewVersion)}/${encodeURIComponent(path)}?size=${width}x${height}&render=4`, location.origin).href : null
+    const key = status?.previewVersion ? new URL(`/__catalog_preview/${encodeURIComponent(status.previewVersion)}/${encodeURIComponent(path)}?size=${width}x${height}&render=5`, location.origin).href : null
     const preview = key ? await cachedThumbnail(key) : null
     if (signal.aborted) throw new DOMException('Preview cancelled', 'AbortError')
     if (preview) return preview

@@ -159,6 +159,25 @@ class ServerTests(unittest.TestCase):
             self.assertIsNotNone(load.call_args.kwargs["cancelled"])
         self.assertEqual(self.request("/api/state")[1], before)
 
+    def test_paint_preview_uses_only_the_selected_trailer_body_override(self):
+        job = {"fields": {"base_color": "(1,1,1)", "airbrush": "true"}, "texture": "/cache/swatch.png",
+               "overrides": {"body.curtain_136": "/cache/curtain.png"}}
+        definitions = {"/paint": {"path": "/paint", "category": "paint_job"},
+                       "/curtain": {"category": "body", "unitId": "curtain_136.scs.box.body"},
+                       "/dryvan": {"category": "body", "unitId": "dry_van_136.scs.box.body"}}
+        with patch.object(self.http.garage.assets, "definition", side_effect=definitions.get, create=True), patch.object(self.http.garage.assets, "paint_job", return_value=job, create=True) as load:
+            for body, key, texture in (("curtain", "body.curtain_136", "/cache/curtain.png"),
+                                       ("dryvan", "body.dry_van_136", "/cache/swatch.png")):
+                code, preview = self.request(f"/api/paint?path=/paint&preview=1&accessoryPath=/{body}")
+                self.assertEqual(code, 200, preview)
+                self.assertEqual(preview["material"]["paintTexture"], texture)
+                self.assertTrue(preview["material"]["airbrush"])
+                self.assertTrue(load.call_args.kwargs["include_overrides"])
+                self.assertEqual(load.call_args.kwargs["accessory_key"], key)
+            count = load.call_count
+            self.assertEqual(self.request("/api/paint?path=/paint&preview=1&accessoryPath=/missing")[0], 400)
+            self.assertEqual(load.call_count, count)
+
     def test_catalog_cab_preview_preserves_selected_look_and_variant(self):
         with patch.object(self.http.garage.assets, "model", return_value={"pieces": []}, create=True) as model:
             self.assertEqual(self.request("/api/model?path=/cab&look=paint&variant=high&requestId=cab-preview")[0], 200)

@@ -566,14 +566,14 @@ class AssetStore:
                 self._definition_catalog = catalog
             return self._definitions.get(path_or_unit.casefold())
 
-    def paint_job(self, path: str, cancelled=None, textures=True, *, include_overrides=True, _entry=None, _fingerprint=None) -> dict:
+    def paint_job(self, path: str, cancelled=None, textures=True, *, include_overrides=True, accessory_key=None, _entry=None, _fingerprint=None) -> dict:
         """Import paint masks once, including the game's accessory overrides."""
         with _IMPORT_LOCK:
             if cancelled and cancelled():
                 raise CancelledError()
             cache = self.__dict__.setdefault("_paint_jobs", {})
             fingerprint = _fingerprint or self._fingerprint()
-            key = (fingerprint, path, textures, include_overrides)
+            key = (fingerprint, path, textures, include_overrides, accessory_key)
             if key in cache:
                 return cache[key]
             entry = _entry or self.definition(path)
@@ -601,7 +601,9 @@ class AssetStore:
                     if kind == "simple_paint_job_data":
                         values = _properties(body)
                         for accessory in values.get("acc_list[]", []):
-                            overrides[_unquote(accessory)] = values
+                            accessory = _unquote(accessory)
+                            if accessory_key is None or accessory == accessory_key:
+                                overrides[accessory] = values
             export = self.cache_path / "models" / hashlib.sha256(str(key[:3]).encode()).hexdigest()[:20]
             def mask(values):
                 resource = _unquote(values.get("paint_job_mask", [""])[-1])
