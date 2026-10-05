@@ -31,7 +31,7 @@ for file in (Path(sys.base_prefix) / "tcl").rglob("license.terms"):
     shutil.copy2(file, licenses / ("Tcl-Tk-" + file.parent.name + ".txt"))
 sources = [
     ("ConverterPIX-SGarage", "Senior-S/ConverterPIX-SGarage", "cfdbd60d5654881bb8eb7997fe228e53dc1acbe7"),
-    ("SII-Decrypt", "TheLazyTomcat/SII_Decrypt", "683e1d8addc96947967148a29a07e0859736a926"),
+    ("SII-Decrypt-cpp", "liam-dong/SII-Decrypt-cpp", "7dd74d79cc0c847be602dc6bb8309f4ecacdbd2a"),
 ]
 archives = []
 for name, repository, commit in sources:

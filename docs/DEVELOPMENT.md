@@ -109,5 +109,5 @@ Materials, looks, and variants still use the small PIT exports. Both geometry pa
 Setup and release packaging pin the fork executable and its matching modified source archive to `cfdbd60d5654881bb8eb7997fe228e53dc1acbe7`.
 
 - [ConverterPIX-SGarage](https://github.com/Senior-S/ConverterPIX-SGarage), pinned to `cfdbd60d5654881bb8eb7997fe228e53dc1acbe7`, converts PMG/PMD resources to native viewer geometry and PIM/PIT. Its LGPL license is in `tools/ConverterPIX-LICENSE.txt`.
-- [SII Decrypt](https://github.com/TheLazyTomcat/SII_Decrypt), binary branch pinned to `683e1d8addc96947967148a29a07e0859736a926`, decrypts temporary save copies. Its MPL license is in `tools/SII-Decrypt-LICENSE.txt`.
+- [SII Decrypt C++](https://github.com/liam-dong/SII-Decrypt-cpp), v1.0.0 source pinned to `7dd74d79cc0c847be602dc6bb8309f4ecacdbd2a`, decrypts and decodes temporary save copies. Setup verifies both the release ZIP and extracted executable checksums and upgrades the previously bundled Pascal 1.5.3 binary. Its MIT license is in `tools/SII-Decrypt-LICENSE.txt`.
 - [SCS format documentation](https://modding.scssoft.com/wiki/Documentation/Engine/Formats) and [archive tools](https://modding.scssoft.com/wiki/Documentation/Tools/Game_Archive_Extractor) describe the game's asset formats.

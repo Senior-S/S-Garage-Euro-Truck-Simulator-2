@@ -5,7 +5,7 @@ S Garage's PolyForm Noncommercial license covers its original code. It does not 
 | Component | License / source |
 | --- | --- |
 | ConverterPIX-SGarage, modified external executable | LGPL-3.0; [source at the pinned revision](https://github.com/Senior-S/ConverterPIX-SGarage/tree/cfdbd60d5654881bb8eb7997fe228e53dc1acbe7). License: [LGPL](tools/ConverterPIX-LICENSE.txt) and [GPL](tools/GPL-3.0.txt). |
-| SII Decrypt, unmodified external executable | MPL-2.0; [source at the pinned revision](https://github.com/TheLazyTomcat/SII_Decrypt/tree/683e1d8addc96947967148a29a07e0859736a926). [License](tools/SII-Decrypt-LICENSE.txt). |
+| SII Decrypt C++, unmodified external executable, v1.0.0 | MIT; [source at the pinned revision](https://github.com/liam-dong/SII-Decrypt-cpp/tree/7dd74d79cc0c847be602dc6bb8309f4ecacdbd2a). [License](tools/SII-Decrypt-LICENSE.txt). |
 | Python | PSF license and included third-party notices; [Python](https://www.python.org/). |
 | Pillow | HPND and bundled notices; [Pillow](https://github.com/python-pillow/Pillow). |
 | Tcl/Tk | Tcl/Tk license terms; [Tcl/Tk](https://www.tcl.tk/). |
