@@ -11,7 +11,7 @@
 
 ### Known missing features and limitations
 
-- **v0.3.1 fixes imports under accented Windows usernames, groups linked trailers into one editable vehicle, and restores trailer paint previews.** This remains a prerelease; keep backups and inspect edited trucks in ETS2.
+- **v0.3.2 restores automatic converter detection when you clear the tool path and save Settings.** It includes v0.3.1's Unicode path fix, linked trailer editing, and corrected trailer paint previews. This remains a prerelease; keep backups and inspect edited trucks in ETS2.
 - Painting uses truck paint jobs and their supported color channels. Independent recoloring of arbitrary parts is not available, and metallic finishes only approximate the game's shaders.
 - Some parts, materials, lighting, and mod assets may render incorrectly or be missing from the preview.
 - Some accessory combinations may not work correctly in ETS2, even if they appear in the garage.
@@ -47,7 +47,7 @@ These are real captures of the app using locally installed game assets. The prev
 You need **Windows 10 version 1903 or newer, or Windows 11, 64-bit**, an installed copy of **Euro Truck Simulator 2**, and a browser with WebGL support. S Garage uses your installed game, DLC, and available mods. Game assets and saves are not included in the download.
 
 1. Open the **[Downloads page](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/releases)**. A GitHub account is not required.
-2. Under **Assets**, download **`S-Garage-v0.3.1-Windows-x64.zip`**. Choose this file instead of GitHub's automatically generated “Source code” downloads.
+2. Under **Assets**, download **`S-Garage-v0.3.2-Windows-x64.zip`**. Choose this file instead of GitHub's automatically generated “Source code” downloads.
 3. Right-click the ZIP and select **Extract All**. Keep the extracted files together.
 4. Open the extracted **S Garage** folder and double-click **`S Garage.exe`**.
 5. Your browser opens the garage. Keep the small S Garage window open while editing; use **Stop garage** when finished.

@@ -153,9 +153,9 @@ def _detect_game_path() -> Path | None:
 
 
 class AssetStore:
-    def __init__(self, game_path: str | None = None, cache_path: Path | None = None):
+    def __init__(self, game_path: str | None = None, cache_path: Path | None = None, *, tool_path: str | None = None):
         self.game_path = Path(game_path).expanduser() if game_path else _detect_game_path()
-        configured_tool = os.environ.get("ETS_GARAGE_CONVERTER") or os.environ.get("ETS2_CONVERTER_PIX")
+        configured_tool = tool_path if tool_path is not None else os.environ.get("ETS_GARAGE_CONVERTER") or os.environ.get("ETS2_CONVERTER_PIX")
         if configured_tool:
             self.tool_path = Path(configured_tool).expanduser()
         else:

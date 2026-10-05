@@ -17,7 +17,7 @@ from test_saves import SOURCE
 
 
 class MinimalAssets:
-    def __init__(self, *arguments):
+    def __init__(self, *arguments, **kwargs):
         self.game_path = None
         self.cache_path = Path(arguments[1])
         self.lock = threading.RLock()
@@ -33,6 +33,36 @@ class MinimalAssets:
 
 
 class ServerTests(unittest.TestCase):
+    def test_clearing_converter_path_detects_bundle_immediately_and_after_restart(self):
+        garage = self.http.garage
+        root = Path(self.temporary.name)
+        bundled = root / "bundle" / "tools" / "converter_pix.exe"
+        bundled.parent.mkdir(parents=True)
+        bundled.write_bytes(b"bundled converter")
+        custom = root / "custom-converter.exe"
+        custom.write_bytes(b"custom converter")
+        game = root / "game"
+        game.mkdir()
+        (game / "def.scs").write_bytes(b"fixture archive")
+        environment = {"ETS_GARAGE_CONVERTER": str(root / "missing-converter.exe"),
+                       "ETS2_CONVERTER_PIX": str(root / "missing-legacy-converter.exe")}
+        with patch.dict(os.environ, environment), patch.object(sys, "_MEIPASS", bundled.parent.parent, create=True), \
+             patch.object(server.AssetStore, "_converter_capabilities", return_value={}), \
+             patch.object(server, "game_running", return_value=False):
+            code, result = self.request("/api/config", {"toolPath": str(custom), "gamePath": str(game),
+                                                       "profilesPath": str(garage.profiles)})
+            self.assertEqual(code, 200, result)
+            self.assertEqual(Path(result["toolPath"]), custom)
+            custom.unlink()
+            code, result = self.request("/api/config", {"toolPath": "  "})
+            self.assertEqual(code, 200, result)
+            self.assertTrue(result["ready"])
+            self.assertEqual(Path(result["toolPath"]), bundled)
+            self.assertEqual(json.loads(garage.config_file.read_text())["toolPath"], "")
+            self.assertEqual({name: os.environ[name] for name in environment}, environment)
+            with patch.object(server, "DATA", garage.config_file.parent):
+                self.assertEqual(server.Garage().assets.tool_path, bundled)
+
     def test_cache_rebuild_requires_acceptance_and_reimports_before_returning(self):
         garage = self.http.garage
         self.request("/api/load", {"saveId": "profiles/54455354/quicksave"})

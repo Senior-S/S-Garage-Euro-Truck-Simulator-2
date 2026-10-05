@@ -42,10 +42,8 @@ class Garage:
         DATA.mkdir(parents=True, exist_ok=True)
         self.config_file = DATA / "settings.json"
         self.config = json.loads(self.config_file.read_text("utf-8")) if self.config_file.exists() else {}
-        if self.config.get("toolPath"):
-            os.environ["ETS_GARAGE_CONVERTER"] = self.config["toolPath"]
         self.profiles = Path(self.config.get("profilesPath") or default_profiles()).resolve()
-        self.assets = AssetStore(self.config.get("gamePath"), Path(self.config.get("cachePath") or DATA / "cache").expanduser().resolve())
+        self.assets = AssetStore(self.config.get("gamePath"), Path(self.config.get("cachePath") or DATA / "cache").expanduser().resolve(), tool_path=self.config.get("toolPath"))
         self.session: SaveSession | None = None
         self.lock = threading.RLock()
         self.scene_cache = None
@@ -254,14 +252,12 @@ class Handler(BaseHTTPRequestHandler):
                         for key in ("decryptorPath", "toolPath"):
                             if config.get(key) and not Path(config[key]).is_file():
                                 raise ValueError(f"{key} does not exist.")
-                        if config.get("toolPath"):
-                            os.environ["ETS_GARAGE_CONVERTER"] = config["toolPath"]
                         cache = Path(config.get("cachePath") or garage.config_file.parent / "cache").expanduser().resolve()
                         if cache.exists() and not cache.is_dir():
                             raise ValueError("Cache folder must be a directory.")
                         cache.mkdir(parents=True, exist_ok=True)
                         config["cachePath"] = str(cache)
-                        assets = AssetStore(config.get("gamePath"), cache)
+                        assets = AssetStore(config.get("gamePath"), cache, tool_path=config.get("toolPath"))
                         assets.progress = garage.progress.update
                         garage.config_file.write_text(json.dumps(config, indent=2), "utf-8")
                         garage.config, garage.profiles, garage.assets = config, profiles, assets

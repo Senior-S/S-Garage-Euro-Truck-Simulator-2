@@ -13,7 +13,7 @@ The portable download includes the runtime, interface, and conversion tools. You
 
 ## Download
 
-Open **[S Garage downloads](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/releases)**. Open the newest release and expand **Assets** if the files are collapsed. Download **`S-Garage-v0.3.1-Windows-x64.zip`**. For newer releases, choose the file ending in **`Windows-x64.zip`**.
+Open **[S Garage downloads](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/releases)**. Open the newest release and expand **Assets** if the files are collapsed. Download **`S-Garage-v0.3.2-Windows-x64.zip`**. For newer releases, choose the file ending in **`Windows-x64.zip`**.
 
 “Source code (zip)” and “Source code (tar.gz)” contain developer files, rather than the ready-to-run app. The separate ConverterPIX and SII Decrypt source archives are provided for license compliance; you do not need them to run S Garage.
 
@@ -71,6 +71,7 @@ To uninstall, stop the garage and delete its extracted folder. Optionally delete
 | Browser tab closed | Click **Open garage** in the launcher. |
 | Port 8765 occupied | Stop another running garage instance, or the other app using that port. |
 | No profiles or saves | Check Settings and create a manual save in ETS2. Confirm the profiles folder matches the one the game uses. |
+| ConverterPIX not found after upgrading | Clear **ConverterPIX Tool** in Settings and click **Save folders** to immediately detect the bundled converter. No restart is needed. |
 | Blank 3D view | Check hardware acceleration and graphics drivers; try another WebGL-capable browser. |
 | Missing part | Confirm its DLC/mod is installed. Missing old-mod hookups are skipped during preview. |
 | Save refused | If the save changed externally, reopen it and reapply your edits. |
