@@ -28,7 +28,7 @@ Catalog thumbnails are cached locally in the browser, up to 512 images. Returnin
 
 The catalog hides equivalent definitions by default, including copies made for different truck brands. Appearance and functional fields must match; only price and unlock level are ignored. Within the current filters, the fitted definition or selected truck's brand is preferred. Check **Show duplicates** to display every matching definition. This preference is remembered locally, and all definitions remain available for loading saves.
 
-The initial UI opens before importing game definitions. Choosing a save resolves its active mods, then imports its catalog and vehicle preview. An inline loading panel shows stages, elapsed time, and completed counts where available, including inside the first-visit guide. Catalog previews pause while the vehicle loads. The 3D viewer and preview renderer load on demand. See [the loading review and benchmarks](LOADING_PERFORMANCE.md).
+The initial UI opens before importing game definitions. Choosing a save resolves its active mods, then imports its catalog and vehicle preview. An inline loading panel shows stages, elapsed time, and completed counts where available, including inside the first-visit guide. Catalog previews pause while the vehicle loads. The 3D viewer and preview renderer load on demand.
 
 Selecting a marker highlights that marker in amber and clears the whole-part highlight. Selecting a fitted part restores its highlight and clears the marker selection. The marker's owner remains available in the attachment editor.
 
@@ -104,7 +104,7 @@ The build helper selects the fork through `ETS_GARAGE_CONVERTER` for the current
 
 The backend checks the converter's capabilities once per executable revision. A supported fork uses one `definitions.sgbundle` for catalog import and lazy include reads, `.sgm` metadata plus `.sgb` arrays for new model exports, and one conversion batch for uncached fitted models and referenced hookups. Model jobs remain serial within the batch. Existing catalog JSON, complete PIM exports, and parsed model caches remain readable. An interrupted or failed batch retains incomplete markers and reports each failed model without discarding successful jobs.
 
-Materials, looks, and variants still use the small PIT exports. Both geometry paths share the same material and attachment logic and the same viewer response format. Format readers live in `backend/converter_formats.py`; the fork's `docs/GARAGE_MODES.md` and `docs/VIEWER_FORMAT.md` describe the file contracts. See [converter validation and measurements](CONVERTER_FORK.md).
+Materials, looks, and variants still use the small PIT exports. Both geometry paths share the same material and attachment logic and the same viewer response format. Format readers live in `backend/converter_formats.py`; the fork's local `docs/GARAGE_MODES.md` and `docs/VIEWER_FORMAT.md` describe the file contracts.
 
 Setup and release packaging pin the fork executable and its matching modified source archive to `ce70713952c93adafd651feb5b64e1078010b1d4`.
 
