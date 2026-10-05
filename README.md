@@ -4,25 +4,25 @@
 
 **A free local 3D truck editor and save editor for ETS2.** Build your truck visually: mix accessories from different trucks, duplicate parts, explore attachment points, and preview changes before loading your save in the game.
 
-**[Download for Windows](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/releases)** · **[Installation guide](docs/INSTALLATION.md)** · **[User guide](docs/USER_GUIDE.md)** · **[Get help](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/issues/new/choose)**
+**[Download for Windows](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/releases)** · **[Installation guide](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/blob/main/docs/INSTALLATION.md)** · **[User guide](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/blob/main/docs/USER_GUIDE.md)** · **[Get help](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/issues/new/choose)**
 
 > [!WARNING]
 > **S Garage is a work in progress (WIP), not a finished tool.** Expect bugs, missing features, and differences between the preview and ETS2. Edits may produce a save that does not load correctly in game. Experiment with a separate manual save and keep a backup of your original saves.
 
 ### Known missing features and limitations
 
-- **v0.3.0 adds owned trailer editing and faster asset imports with ConverterPIX-SGarage.** This remains a prerelease; keep backups and inspect edited trucks in ETS2.
+- **v0.3.1 fixes imports under accented Windows usernames, groups linked trailers into one editable vehicle, and restores trailer paint previews.** This remains a prerelease; keep backups and inspect edited trucks in ETS2.
 - Painting uses truck paint jobs and their supported color channels. Independent recoloring of arbitrary parts is not available, and metallic finishes only approximate the game's shaders.
 - Some parts, materials, lighting, and mod assets may render incorrectly or be missing from the preview.
 - Some accessory combinations may not work correctly in ETS2, even if they appear in the garage.
 
 This list is not exhaustive. Please [report bugs or missing features](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/issues/new/choose), or add **`seniors` on Discord**.
 
-![S Garage showing a customized Scania in its 3D garage](docs/media/overview.png)
+![S Garage showing a customized Scania in its 3D garage](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/blob/main/docs/media/overview.png)
 
 ## See it before downloading
 
-![A short demonstration of the garage, light modes, and attachment markers](docs/media/garage-demo.gif)
+![A short demonstration of the garage, light modes, and attachment markers](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/blob/main/docs/media/garage-demo.gif)
 
 [Watch or download the full demo video](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/releases/download/v0.1.0/S-Garage-demo.mp4).
 
@@ -40,21 +40,21 @@ These are real captures of the app using locally installed game assets. The prev
 - Show **All** markers, the **Selected only** marker, or hide them completely.
 - Enable **Advanced view** for internal names and supported save-field editing.
 
-![Attachment selection and the visual accessory catalog](docs/media/accessories.png)
+![Attachment selection and the visual accessory catalog](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/blob/main/docs/media/accessories.png)
 
 ## Download and start
 
 You need **Windows 10 version 1903 or newer, or Windows 11, 64-bit**, an installed copy of **Euro Truck Simulator 2**, and a browser with WebGL support. S Garage uses your installed game, DLC, and available mods. Game assets and saves are not included in the download.
 
 1. Open the **[Downloads page](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/releases)**. A GitHub account is not required.
-2. Under **Assets**, download **`S-Garage-v0.3.0-Windows-x64.zip`**. Choose this file instead of GitHub's automatically generated “Source code” downloads.
+2. Under **Assets**, download **`S-Garage-v0.3.1-Windows-x64.zip`**. Choose this file instead of GitHub's automatically generated “Source code” downloads.
 3. Right-click the ZIP and select **Extract All**. Keep the extracted files together.
 4. Open the extracted **S Garage** folder and double-click **`S Garage.exe`**.
 5. Your browser opens the garage. Keep the small S Garage window open while editing; use **Stop garage** when finished.
 
 **No Python, Node.js, Git, or installation wizard is needed for the portable download.** Game and profile folders are detected automatically; open **Settings** to select them yourself if necessary. First-time imports can take a while; later visits reuse local caches.
 
-See the **[installation guide](docs/INSTALLATION.md)** for updating and troubleshooting.
+See the **[installation guide](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/blob/main/docs/INSTALLATION.md)** for updating and troubleshooting.
 
 ## Your first truck edit
 
@@ -66,7 +66,7 @@ See the **[installation guide](docs/INSTALLATION.md)** for updating and troubles
 
 Closing the browser keeps the local server running. Stopping S Garage ends the editing session; save your edits first. Light and marker controls only affect the preview.
 
-More detail: **[User guide](docs/USER_GUIDE.md)** · **[Restore a save backup](docs/INSTALLATION.md#restore-a-save-backup)**.
+More detail: **[User guide](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/blob/main/docs/USER_GUIDE.md)** · **[Restore a save backup](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/blob/main/docs/INSTALLATION.md#restore-a-save-backup)**.
 
 ## What to expect
 
@@ -86,4 +86,4 @@ The original code is **source-available under [PolyForm Noncommercial 1.0.0](LIC
 
 Euro Truck Simulator 2 and its game assets belong to **SCS Software**. S Garage is an unofficial community tool, unaffiliated with SCS Software.
 
-For developers: **[Build and contribute](CONTRIBUTING.md)** · **[Technical documentation](docs/DEVELOPMENT.md)**.
+For developers: **[Build and contribute](CONTRIBUTING.md)** · **[Technical documentation](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/blob/main/docs/DEVELOPMENT.md)**.

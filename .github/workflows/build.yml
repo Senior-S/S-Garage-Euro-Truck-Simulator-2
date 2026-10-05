@@ -22,6 +22,7 @@ jobs:
       - name: Install and test backend
         run: |
           python -m pip install -r requirements.txt
+          ./setup-tools.ps1
           python -m unittest discover -s tests
       - name: Build portable application
         shell: powershell
@@ -32,7 +33,7 @@ jobs:
       - name: Verify packaged resources
         shell: powershell
         run: |
-          $appCheck = Start-Process -FilePath 'dist/S Garage/S Garage.exe' -ArgumentList '--check' -Wait -PassThru
+          $appCheck = Start-Process -FilePath 'dist/S Garage/S Garage.exe' -ArgumentList '--check' -WindowStyle Hidden -Wait -PassThru
           if ($appCheck.ExitCode -ne 0) { throw 'Packaged resource check failed.' }
       - uses: actions/upload-artifact@v4
         with:

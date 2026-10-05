@@ -1,4 +1,4 @@
-"""Package only the built app, public docs, licenses, and pinned tool sources."""
+"""Package the built app, notices, licenses, and pinned tool sources."""
 import hashlib
 from importlib.metadata import distribution
 from pathlib import Path
@@ -14,7 +14,6 @@ release = root / "release"
 release.mkdir(exist_ok=True)
 for name in ("LICENSE", "README.md", "START_HERE.txt", "THIRD_PARTY.md"):
     shutil.copy2(root / name, app / name)
-shutil.copytree(root / "docs", app / "docs", dirs_exist_ok=True)
 licenses = app / "third-party-licenses"
 licenses.mkdir(exist_ok=True)
 for package in ("react", "react-dom", "scheduler", "three", "lucide-react", "@fontsource/barlow-condensed", "@fontsource/ibm-plex-sans", "@fontsource/ibm-plex-mono"):
@@ -44,7 +43,7 @@ for name, repository, commit in sources:
 archive = release / f"S-Garage-v{version}-Windows-x64.zip"
 with ZipFile(archive, "w", ZIP_DEFLATED) as output:
     for file in sorted(app.rglob("*")):
-        if file.is_file():
+        if file.is_file() and file.relative_to(app).parts[0] != "docs":
             output.write(file, file.relative_to(app.parent))
 archives.insert(0, archive)
 video = release / "S-Garage-demo.mp4"

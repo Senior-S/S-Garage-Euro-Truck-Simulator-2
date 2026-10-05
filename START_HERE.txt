@@ -4,13 +4,13 @@ S GARAGE - EURO TRUCK SIMULATOR 2
 2. Double-click S Garage.exe.
 3. Keep the small launcher window open while editing in your browser.
 4. Choose a profile, save, and truck.
-5. Close ETS2 before clicking Save changes in the garage.
+5. If ETS2 is running, load the edited save before saving again in game.
 6. Save your changes before using Stop garage.
 
 No Python or Node.js installation is needed.
 Keep the _internal folder beside S Garage.exe.
 
-Installation guide: docs/INSTALLATION.md
+Installation guide: https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/blob/main/docs/INSTALLATION.md
 Online help: https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2
 Discord: seniors
 
