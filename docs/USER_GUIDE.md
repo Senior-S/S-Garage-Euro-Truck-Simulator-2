@@ -60,7 +60,7 @@ To reverse a saved change after ending the session, **[restore a backup](INSTALL
 
 ## Custom trailers
 
-Opening a save still selects the assigned truck. Open the vehicle dropdown below **Installed parts** to browse **Trucks** first, then expand **Trailers**. Only trailers owned by the profile appear. Linked sections of doubles and other combinations appear separately, with a section number; select each section to edit its accessories. Editing parts preserves the saved trailer chain.
+Opening a save still selects the assigned truck. Open the vehicle dropdown below **Installed parts** to browse **Trucks** first, then expand **Trailers**. Only trailers owned by the profile appear. Doubles and other linked combinations appear as one trailer, with all sections together in the preview. Each section has its own edit points, and installed parts show their section number. Select a part or edit point to change that section, including its paint. Editing parts preserves the saved trailer chain. Models without coupling locators use approximate preview spacing and show a preview issue.
 
 Trailers use the same part picker, 3D attachment markers, add/replace/copy controls, paint editor, advanced fields, undo/redo, history, and save backups. Trailer bodies mount on the chassis, and wheel parts retain their axle offsets. You can mix accessories across vehicles when their categories match. Compatibility and the final appearance still depend on ETS2 and the installed definitions.
 

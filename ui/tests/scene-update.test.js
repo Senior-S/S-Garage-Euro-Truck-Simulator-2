@@ -88,3 +88,29 @@ test('removing one hookup preserves different hookups on the same owner', () => 
   assert.equal([...group.userData.instances.values()][0], retained)
   disposeObject(group)
 })
+
+
+test('shared accessory IDs in trailer sections retain independent meshes and markers', () => {
+  const group = new THREE.Group(), markers = new THREE.Group(); group.add(markers)
+  const first = { ...part('shared-body', 'body', [0, 0, 0]), vehicleId: 'front', section: 1 }
+  const second = { ...first, vehicleId: 'rear', section: 2, position: [0, 0, 8] }
+  const frontPoint = { ...point([0, 0, 0]), accessoryId: first.id, vehicleId: first.vehicleId, section: 1 }
+  const rearPoint = { ...frontPoint, vehicleId: second.vehicleId, section: 2, position: [0, 0, 8] }
+  updateTruckGroup(group, markers, { parts: [first, second], points: [frontPoint, rearPoint] })
+  const [frontMesh, rearMesh] = [...group.userData.instances.values()]
+  const [frontMarker, rearMarker] = markers.children
+  assert.equal(frontMesh.children[0].userData.vehicleId, 'front')
+  assert.equal(rearMesh.children[0].userData.vehicleId, 'rear')
+  assert.equal(rearMesh.children[0].userData.section, 2)
+  assert.equal(rearMarker.userData.pick.vehicleId, 'rear')
+  assert.equal(rearMarker.children[0].userData.pick.section, 2)
+  // Reordering a chain update must never swap ownership of retained objects.
+  updateTruckGroup(group, markers, { parts: [second, first], points: [rearPoint, frontPoint] })
+  assert.deepEqual([...group.userData.instances.values()], [frontMesh, rearMesh])
+  assert.deepEqual(markers.children, [frontMarker, rearMarker])
+  updateTruckGroup(group, markers, { parts: [second], points: [rearPoint] })
+  assert.deepEqual([...group.userData.instances.values()], [rearMesh])
+  assert.deepEqual(markers.children, [rearMarker])
+  assert.deepEqual(rearMesh.position.toArray(), [0, 0, 8])
+  disposeObject(group)
+})

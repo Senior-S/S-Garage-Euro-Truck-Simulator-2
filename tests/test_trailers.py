@@ -56,19 +56,23 @@ class TrailerTests(unittest.TestCase):
         state = self.session.state()
         self.assertEqual(state['truck']['id'], '_nameless.2')
         self.assertEqual(len(state['trucks']), 2)
-        self.assertEqual([v['id'] for v in state['trailers']], ['_nameless.10', '_nameless.11'])
-        self.assertEqual(state['trailers'][1]['section'], 2)
+        self.assertEqual([v['id'] for v in state['trailers']], ['_nameless.10'])
+        self.assertEqual(state['trailers'][0]['sectionCount'], 2)
+        self.assertEqual(state['trailers'][0]['accessoryCount'], 6)
         self.session.truck_id = '_nameless.10'
         active = self.session.state()['truck']
         self.assertEqual(active['kind'], 'trailer')
         self.assertEqual(active['brand'], 'scs.box')
-        self.assertEqual([a['category'] for a in active['accessories']], ['chassis', 'body', 'r_tire', 'r_grill'])
+        self.assertEqual([a['category'] for a in active['accessories']], ['chassis', 'body', 'r_tire', 'r_grill', 'chassis', 'body'])
+        self.assertEqual([part['vehicleId'] for part in active['accessories']], ['_nameless.10'] * 4 + ['_nameless.11'] * 2)
+        self.assertEqual([part['section'] for part in active['accessories']], [1] * 4 + [2] * 2)
+        self.assertEqual([section['id'] for section in active['sections']], ['_nameless.10', '_nameless.11'])
         self.assertEqual(category('/def/vehicle/trailer_owned/scs.box/data.sii'), 'trailer')
         self.assertEqual(category('/def/vehicle/trailer_owned/scs.box/accessory/r_bumper/paint.sii'), 'r_bumper')
 
     def test_trailer_edits_history_and_backup_preserve_trucks_and_chain(self):
         result = self.session.edit({'op': 'duplicate', 'truckId': '_nameless.10', 'accessoryId': '_nameless.14'}, CATALOG)
-        self.assertEqual(len(result['truck']['accessories']), 5)
+        self.assertEqual(len(result['truck']['accessories']), 7)
         self.assertEqual(fields(self.session.block(result['editedAccessoryId']))['offset'], '0')
         self.session.edit({'op': 'fields', 'accessoryId': '_nameless.13', 'fields': {'refund': '123'}}, CATALOG)
         self.assertEqual(fields(self.session.block('_nameless.13'))['refund'], '0')
@@ -98,7 +102,7 @@ class TrailerTests(unittest.TestCase):
         self.assertEqual(fields(self.session.block(result["editedAccessoryId"]))["data_path"], '"' + path + '"')
         self.assertIn("scs.box/body/curtain.sii", self.session.block("_nameless.13"))
         added = self.session.edit({"op": "add", "dataPath": path}, catalog)["editedAccessoryId"]
-        self.assertEqual(self.session.state()["truck"]["accessoryCount"], 5)
+        self.assertEqual(self.session.state()["truck"]["accessoryCount"], 7)
         self.session.edit({"op": "remove", "accessoryId": added}, catalog)
         self.session.history(steps=3)
         self.assertEqual(self.session.render(), TRAILER_SOURCE)
@@ -121,9 +125,75 @@ class TrailerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Invalid owned trailer chain'):
             SaveSession(self.path, TRAILER_SOURCE.replace('slave_trailer: null', 'slave_trailer: _nameless.10'), 'test', 'Test')
 
+    def test_listed_slave_before_root_still_groups_owned_trailer(self):
+        text = TRAILER_SOURCE.replace(' trailers: 1\n trailers[0]: _nameless.10', ' trailers: 2\n trailers[0]: _nameless.11\n trailers[1]: _nameless.10')
+        session = SaveSession(self.path, text, 'test', 'Test')
+        session.truck_id = '_nameless.11'
+        state = session.state()
+        self.assertEqual([trailer['id'] for trailer in state['trailers']], ['_nameless.10'])
+        self.assertEqual(state['truck']['id'], '_nameless.10')
+        self.assertTrue(state['trailers'][0]['selected'])
+        self.assertEqual([section['id'] for section in state['truck']['sections']], ['_nameless.10', '_nameless.11'])
+
+    def test_slave_shared_accessory_edit_preserves_root_and_history_selection(self):
+        result = self.session.edit({'op': 'fields', 'truckId': '_nameless.11', 'accessoryId': '_nameless.13', 'fields': {'refund': '123'}}, CATALOG)
+        edited = result['editedAccessoryId']
+        self.assertEqual(result['editedVehicleId'], '_nameless.11')
+        self.assertNotEqual(edited, '_nameless.13')
+        self.assertEqual(result['truck']['id'], '_nameless.10')
+        self.assertEqual(self.session.truck_id, '_nameless.10')
+        self.assertIn('_nameless.13', refs(self.session.block('_nameless.10'), 'accessories'))
+        self.assertIn(edited, refs(self.session.block('_nameless.11'), 'accessories'))
+        self.assertEqual(fields(self.session.block('_nameless.13'))['refund'], '0')
+        self.assertEqual(fields(self.session.block(edited))['refund'], '123')
+        self.assertEqual(result['history'][-1]['truckId'], '_nameless.11')
+        self.assertEqual(self.session.history()['truck']['id'], '_nameless.10')
+        self.assertEqual(self.session.render(), TRAILER_SOURCE)
+        self.assertEqual(self.session.history(True)['truck']['id'], '_nameless.10')
+        self.assertIn(edited, refs(self.session.block('_nameless.11'), 'accessories'))
+
+    def test_default_edit_after_slave_selection_targets_root(self):
+        self.session.truck_id = '_nameless.11'
+        result = self.session.edit({'op': 'duplicate', 'accessoryId': '_nameless.14'}, CATALOG)
+        self.assertEqual(result['editedVehicleId'], '_nameless.10')
+        self.assertEqual(len(refs(self.session.block('_nameless.10'), 'accessories')), 5)
+        self.assertEqual(len(refs(self.session.block('_nameless.11'), 'accessories')), 2)
+
+    def test_add_and_remove_target_slave_section(self):
+        path = '/def/vehicle/trailer_owned/scs.box/accessory/r_bumper/paint.sii'
+        catalog = {path: {'path': path, 'category': 'r_bumper'}}
+        result = self.session.edit({'op': 'add', 'truckId': '_nameless.11', 'dataPath': path}, catalog)
+        added = result['editedAccessoryId']
+        self.assertEqual(result['truck']['accessoryCount'], 7)
+        self.assertIn(added, refs(self.session.block('_nameless.11'), 'accessories'))
+        self.assertNotIn(added, refs(self.session.block('_nameless.10'), 'accessories'))
+        self.assertEqual(next(part for part in result['truck']['accessories'] if part['id'] == added)['vehicleId'], '_nameless.11')
+        self.session.edit({'op': 'remove', 'truckId': '_nameless.11', 'accessoryId': added}, catalog)
+        self.assertEqual(self.session.render(), TRAILER_SOURCE)
+
+    def test_multiple_owned_roots_preserve_player_order_and_long_chain(self):
+        text = TRAILER_SOURCE.replace(' trailers: 1\n trailers[0]: _nameless.10', ' trailers: 2\n trailers[0]: _nameless.15\n trailers[1]: _nameless.10')
+        text = text.replace('slave_trailer: null', 'slave_trailer: _nameless.16')
+        text = text.replace('\n}\n}', '\n}\ntrailer : _nameless.15 {\n slave_trailer: null\n accessories: 0\n}\ntrailer : _nameless.16 {\n slave_trailer: null\n accessories: 0\n}\n}')
+        session = SaveSession(self.path, text, 'test', 'Test')
+        session.truck_id = '_nameless.16'
+        state = session.state()
+        self.assertEqual([trailer['id'] for trailer in state['trailers']], ['_nameless.15', '_nameless.10'])
+        self.assertEqual([trailer['sectionCount'] for trailer in state['trailers']], [1, 3])
+        self.assertEqual(state['truck']['id'], '_nameless.10')
+        self.assertEqual([section['section'] for section in state['truck']['sections']], [1, 2, 3])
+
+    def test_invalid_missing_and_converging_trailer_chains_fail_clearly(self):
+        texts = [TRAILER_SOURCE.replace('slave_trailer: _nameless.11', 'slave_trailer: _nameless.missing'),
+                 TRAILER_SOURCE.replace('trailers[0]: _nameless.10', 'trailers[0]: _nameless.missing'),
+                 TRAILER_SOURCE.replace(' trailers: 1', ' trailers: 2\n trailers[1]: _nameless.15').replace('\n}\n}', '\n}\ntrailer : _nameless.15 {\n slave_trailer: _nameless.11\n accessories: 0\n}\n}')]
+        for text in texts:
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, 'Invalid owned trailer chain'):
+                SaveSession(self.path, text, 'test', 'Test')
+
     def test_trailer_scene_places_body_wheels_and_duplicate_hookups(self):
         self.session.truck_id = "_nameless.10"
-        vehicle = self.session.state()["truck"]
+        vehicle = self.session.state()["truck"]["sections"][0]
         entries = [{"path": a["dataPath"], "unitId": a["id"], "category": a["category"], "model": a["id"]} for a in vehicle["accessories"]]
         entries.append({"path": "/hookup", "unitId": "lamp.white.addon_hookup", "category": "hookup", "model": "lamp"})
         model = {"pieces": [{"material": {"paintable": True}}], "locators": []}
@@ -145,7 +215,7 @@ class TrailerTests(unittest.TestCase):
             self.assertEqual(wheels[0]["scale"], [-1, 1, 1])
             self.assertTrue(any(p["kind"] == "part" and p["category"] == "body" for p in scene["points"]))
             self.session.edit({"op": "hookup", "accessoryId": "_nameless.6", "slotName": "slot_0", "hookup": "lamp.white.addon_hookup", "duplicate": True}, CATALOG)
-            scene = build_scene(self.session.state()["truck"], store)
+            scene = build_scene(self.session.state()["truck"]["sections"][0], store)
             self.assertEqual(len([p for p in scene["parts"] if p["category"] == "hookup"]), 2)
 
     def test_catalog_imports_owned_trailer_parts_and_wheels(self):

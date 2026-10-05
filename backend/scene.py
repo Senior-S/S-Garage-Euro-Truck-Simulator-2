@@ -44,13 +44,62 @@ def compose(parent: dict, local: dict) -> dict:
             "scale": [a * b for a, b in zip(scale, local.get("scale") or IDENTITY["scale"])]}
 
 
-def build_scene(truck: dict, assets, cancelled=None, model_cache=None) -> dict:
+def build_scene(truck: dict, assets, cancelled=None, model_cache=None, *, prune_models=True) -> dict:
     def check_cancelled():
         if cancelled and cancelled():
             raise CancelledError()
 
     check_cancelled()
     parts, points, issues = [], [], []
+    models = model_cache if model_cache is not None else {}
+    sections = truck.get("sections", [])
+    if len(sections) > 1:
+        rear_hook = None
+        previous_scene, previous_transform = None, IDENTITY
+        for index, section in enumerate(sections):
+            check_cancelled()
+            scene = build_scene(section, assets, cancelled, models, prune_models=False)
+            hooks = {}
+            for part in scene["parts"]:
+                check_cancelled()
+                if part["category"] == "chassis":
+                    for locator in part["model"].get("locators", []):
+                        if locator["name"] in ("hook", "s_hook"):
+                            hooks.setdefault(locator["name"], compose(part, locator)["position"])
+            transform = IDENTITY
+            if index:
+                if rear_hook is not None and "hook" in hooks:
+                    # Show a straight chain with the game's coupling points coincident.
+                    offset = [parent - child for parent, child in zip(rear_hook, hooks["hook"])]
+                else:
+                    # Only scan geometry when a model lacks a coupling locator.
+                    bounds = [[], []]
+                    for side, (local_scene, parent) in enumerate(((previous_scene, previous_transform), (scene, IDENTITY))):
+                        for part in local_scene["parts"]:
+                            check_cancelled()
+                            world = compose(parent, part)
+                            for piece in part["model"].get("pieces", []):
+                                positions = piece.get("positions", [])
+                                if not positions:
+                                    continue
+                                axes = [(min(positions[axis::3]), max(positions[axis::3])) for axis in range(3)]
+                                bounds[side].extend(compose(world, {**IDENTITY, "position": [x, y, z]})["position"][2]
+                                                    for x in axes[0] for y in axes[1] for z in axes[2])
+                    offset = [0, 0, max(bounds[0], default=previous_transform["position"][2]) - min(bounds[1], default=0) + .5]
+                    issues.append(f'Section {section.get("section", index + 1)}: coupling locators unavailable; preview spacing is approximate.')
+                transform = {**IDENTITY, "position": offset}
+            parts.extend({**part, **compose(transform, part)} for part in scene["parts"])
+            points.extend({**point, **compose(transform, point)} for point in scene["points"])
+            issues.extend(f'Section {section.get("section", index + 1)}: {issue}' for issue in scene["issues"])
+            rear_hook = compose(transform, {**IDENTITY, "position": hooks["s_hook"]})["position"] if "s_hook" in hooks else None
+            previous_scene, previous_transform = scene, transform
+        if prune_models:
+            used = {part["model"]["key"] for part in parts}
+            for key in list(models):
+                if models[key]["key"] not in used:
+                    del models[key]
+        return {"parts": parts, "points": points, "issues": list(dict.fromkeys(issues)),
+                "truckId": truck["id"], "materialFidelity": "Game geometry and locators; approximate browser materials."}
     progress = getattr(assets, "progress", None)
     accessories = truck["accessories"]
     catalog = assets.catalog()
@@ -65,7 +114,6 @@ def build_scene(truck: dict, assets, cancelled=None, model_cache=None) -> dict:
         installed.setdefault(accessory["category"], []).append(accessory)
     mounts = []
     pending = []
-    models = model_cache if model_cache is not None else {}
     used_models = set()
     active_paint = next((a for a in accessories if a["category"] == "paint_job"), None)
     paint_color = active_paint["fields"].get("base_color") if active_paint else None
@@ -229,8 +277,11 @@ def build_scene(truck: dict, assets, cancelled=None, model_cache=None) -> dict:
     check_cancelled()
     if progress:
         progress("Sending vehicle preview", f"{len(parts)} visible part instances.")
-    for key in list(models):
-        if key not in used_models:
-            del models[key]
+    for item in parts + points:
+        item.update(vehicleId=truck["id"], section=truck.get("section", 1))
+    if prune_models:
+        for key in list(models):
+            if key not in used_models:
+                del models[key]
     return {"parts": parts, "points": points, "issues": list(dict.fromkeys(issues)),
             "truckId": truck["id"], "materialFidelity": "Game geometry and locators; approximate browser materials."}

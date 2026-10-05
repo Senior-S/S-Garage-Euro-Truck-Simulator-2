@@ -3,6 +3,7 @@ from copy import deepcopy
 import sys
 import unittest
 from concurrent.futures import CancelledError
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 from scene import build_scene, compose, IDENTITY
@@ -41,6 +42,69 @@ class FakeAssets:
 
 
 class SceneTests(unittest.TestCase):
+    def test_linked_trailer_sections_keep_mounts_paint_and_models_independent(self):
+        assets = FakeAssets()
+        assets.entries = [{"path": path, "unitId": path, "category": category, "model": path}
+                          for path, category in (("/lead", "chassis"), ("/rear", "chassis"), ("/body", "body"), ("/tire", "r_tire"))]
+        assets.entries.append({"path": "/paint", "unitId": "paint", "category": "paint_job"})
+        piece = {"positions": [-1, 0, -5, 1, 0, 5, 1, 2, 5], "indices": [0, 1, 2], "material": {"paintable": True}}
+        mounts = [{"name": name, **IDENTITY, "position": position} for name, position in (
+            ("body", [0, 1.3, 0]), ("wheel_r_0", [-.8, .5, 4]), ("wheel_r_1", [.8, .5, 4]))]
+        models = {
+            "/lead": {"pieces": [piece], "locators": mounts + [{"name": "s_hook", **IDENTITY, "position": [0, .45, 5.451593399]}]},
+            "/rear": {"pieces": [piece], "locators": mounts + [{"name": "hook", **IDENTITY, "position": [0, .45, -5.516731739]}]},
+            "/body": {"pieces": [piece], "locators": [{"name": "slot_0", **IDENTITY, "position": [0, 1, 2]}]},
+            "/tire": {"pieces": [piece], "locators": []},
+        }
+        sections = []
+        for number, chassis, color in ((1, "/lead", "(1,0,0)"), (2, "/rear", "(0,0,1)")):
+            section_id = f"section{number}"
+            accessories = [{"id": category, "type": "vehicle_wheel_accessory" if category == "r_tire" else "vehicle_accessory",
+                            "dataPath": path, "category": category, "fields": {}, "slots": []}
+                           for path, category in ((chassis, "chassis"), ("/body", "body"), ("/tire", "r_tire"))]
+            accessories.append({"id": "paint", "type": "vehicle_paint_job_accessory", "dataPath": "/paint", "category": "paint_job", "fields": {"base_color": color}, "slots": []})
+            sections.append({"id": section_id, "section": number, "accessories": accessories})
+        trailer = {"id": "section1", "sections": sections, "accessories": [part for section in sections for part in section["accessories"]]}
+        cache = {}
+        with patch.object(assets, "model", side_effect=lambda path: deepcopy(models[path])) as load:
+            scene = build_scene(trailer, assets, model_cache=cache)
+            self.assertEqual(scene["issues"], [])
+            bodies = [part for part in scene["parts"] if part["category"] == "body"]
+            self.assertEqual([part["vehicleId"] for part in bodies], ["section1", "section2"])
+            self.assertEqual([part["paint"]["color"] for part in bodies], [[1, 0, 0], [0, 0, 1]])
+            self.assertEqual(bodies[0]["position"], [0, 1.3, 0])
+            self.assertAlmostEqual(bodies[1]["position"][2], 10.968325138)
+            self.assertEqual(len([part for part in scene["parts"] if part["category"] == "r_tire"]), 4)
+            points = [point for point in scene["points"] if point.get("category") == "body"]
+            self.assertEqual([point["vehicleId"] for point in points], ["section1", "section2"])
+            self.assertEqual([point["section"] for point in points], [1, 2])
+            hookup_points = [point for point in scene["points"] if point["kind"] == "hookup"]
+            self.assertEqual([point["vehicleId"] for point in hookup_points], ["section1", "section2"])
+            self.assertAlmostEqual(hookup_points[1]["position"][2] - hookup_points[0]["position"][2], 10.968325138)
+            self.assertEqual(load.call_count, 4)
+            build_scene(trailer, assets, model_cache=cache)
+            self.assertEqual(load.call_count, 4)
+            trailer["sections"] = [sections[0], {**sections[1], "accessories": []}]
+            build_scene(trailer, assets, model_cache=cache)
+            self.assertNotIn(("/rear", None, None), cache)
+
+    def test_trailer_chain_without_couplers_uses_transformed_bounds_and_marks_empty_mounts(self):
+        assets = FakeAssets()
+        assets.entries = [{"path": "/chassis", "unitId": "chassis", "category": "chassis", "model": "frame"},
+                          {"path": "/body", "unitId": "body", "category": "body"}]
+        model = {"pieces": [{"positions": [-1, 0, -3, 1, 0, 7], "material": {}}],
+                 "locators": [{"name": "body", **IDENTITY, "position": [0, 1, 0]}]}
+        sections = [{"id": f"section{number}", "section": number,
+                     "accessories": [{"id": "shared", "type": "vehicle_accessory", "dataPath": "/chassis", "category": "chassis", "fields": {}, "slots": []}]}
+                    for number in range(1, 4)]
+        with patch.object(assets, "model", return_value=model):
+            scene = build_scene({"id": "section1", "sections": sections}, assets)
+        self.assertEqual([part["position"][2] for part in scene["parts"]], [0, 10.5, 21])
+        self.assertEqual([point["vehicleId"] for point in scene["points"]], ["section1", "section2", "section3"])
+        self.assertTrue(all(point["accessoryId"] is None for point in scene["points"]))
+        self.assertEqual(len(scene["issues"]), 2)
+        self.assertTrue(all("preview spacing is approximate" in issue for issue in scene["issues"]))
+
     def test_plural_doorstep_mount_renders_and_selects_the_singular_category(self):
         assets = FakeAssets()
         assets.entries.append({"path": "/step", "unitId": "step", "category": "doorstep", "model": "step"})

@@ -37,6 +37,8 @@ const friendlySlot = value => { const name = String(value || '').replace(/^slot_
 const profileId = save => save.profileId || String(save.id || '').split('/').slice(0, 2).join('/') || save.profile
 const dateLabel = value => value ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : 'Date unavailable'
 
+const accessoryKey = part => part ? JSON.stringify([part.vehicleId, part.id ?? part.accessoryId]) : ''
+
 function App() {
   const [status, setStatus] = React.useState(null), [saves, setSaves] = React.useState([]), [state, setState] = React.useState(null), [catalog, setCatalog] = React.useState([]), [catalogLoading, setCatalogLoading] = React.useState(true)
   const [guideOpen, setGuideOpen] = React.useState(() => localStorage.getItem('yard.guideSeen') !== 'true')
@@ -55,19 +57,26 @@ function App() {
   const [advanced, setAdvanced] = React.useState(() => localStorage.getItem('yard.advanced') === 'true')
   const sceneCancel = React.useRef(null), truckSelectRequest = React.useRef(null), truckSelectSequence = React.useRef(0)
   const reportError = React.useCallback(message => setError(message), [])
-  const activePart = state?.truck?.accessories?.find(a => a.id === selected) || state?.truck?.accessories?.[0]
+  const activePart = state?.truck?.accessories?.find(a => accessoryKey(a) === selected && (!selectedMarker?.vehicleId || a.vehicleId === selectedMarker.vehicleId)) || state?.truck?.accessories?.find(a => !selectedMarker?.vehicleId || a.vehicleId === selectedMarker.vehicleId)
   const categories = React.useMemo(() => [...new Set([...catalog, ...(state?.truck?.accessories || [])].map(item => item.category).filter(Boolean))].sort(), [catalog, state?.truck?.accessories])
   const brands = React.useMemo(() => [...new Set(catalog.map(item => item.brand).filter(Boolean))].sort(), [catalog])
   const profiles = [...new Map(saves.map(save => [profileId(save), { id: profileId(save), name: save.profile || 'Profile' }])).values()]
   const profileSaves = saves.filter(save => profileId(save) === selectedProfile).sort((a, b) => new Date(b.modified || b.created || 0) - new Date(a.modified || a.created || 0))
   const activeSave = saves.find(save => save.id === state?.saveId)
-  const paintPart = state?.truck?.accessories?.find(part => part.category === 'paint_job')
-  const previewCab = state?.truck?.accessories?.find(part => part.category === (state.truck.kind === 'trailer' ? 'body' : 'cabin'))
+  const selectedVehicleId = selectedMarker?.vehicleId || mountPoint?.vehicleId || activePart?.vehicleId || state?.truck?.id
+  const activeSection = state?.truck?.sections?.find(section => section.id === selectedVehicleId) || state?.truck
+  const sectionAccessories = state?.truck?.accessories?.filter(part => (part.vehicleId || state.truck.id) === selectedVehicleId) || []
+  const paintPart = sectionAccessories.find(part => part.category === 'paint_job')
+  const previewCab = sectionAccessories.find(part => part.category === (state.truck.kind === 'trailer' ? 'body' : 'cabin'))
   const partLabel = part => paints.find(item => item.path === part.dataPath)?.name || catalog.find(item => item.path === part.dataPath)?.name || friendlyCategory(part.category || part.type)
 
   const applyState = React.useCallback(data => {
     setState(data)
-    setSelected(current => data?.truck?.accessories?.some(p => p.id === data.editedAccessoryId) ? data.editedAccessoryId : data?.truck?.accessories?.some(p => p.id === current) ? current : data?.truck?.accessories?.[0]?.id || '')
+    setSelected(current => {
+      const parts = data?.truck?.accessories || [], owner = (current ? JSON.parse(current)[0] : null) || data?.truck?.id
+      const edited = parts.find(part => part.id === data.editedAccessoryId && (part.vehicleId || data.truck.id) === (data.editedVehicleId || owner))
+      return accessoryKey(edited || parts.find(part => accessoryKey(part) === current) || parts[0])
+    })
   }, [])
   const withProgress = React.useCallback(async (label, task) => {
     const id = crypto.randomUUID()
@@ -102,21 +111,34 @@ function App() {
   React.useEffect(() => {
     if (!state?.truck) return
     if (chosenSlot) {
-      const owner = state.truck.accessories.find(part => part.id === (selectedMarker?.accessoryId || selected))
-      setMode(owner?.slots?.some(slot => slot.name === chosenSlot && slot.hookup) ? 'replace' : 'add')
+      const markerKey = selectedMarker ? accessoryKey(selectedMarker) : selected
+      const edited = state.editedVehicleId === selectedMarker?.vehicleId
+        ? state.truck.accessories.find(part => part.vehicleId === state.editedVehicleId && part.id === state.editedAccessoryId && part.fields?.slot_name !== undefined && part.fields?.slot_hookup !== undefined)
+        : null
+      const owner = state.truck.accessories.find(part => accessoryKey(part) === markerKey) || edited
+      const slot = owner?.slots?.find(slot => slot.name === chosenSlot)
+      if (owner?.fields?.slot_name === undefined || owner?.fields?.slot_hookup === undefined) {
+        // Undo can remove a copied owner. Require a fresh pick instead of guessing another addon.
+        setSelectedMarker(null); setChosenSlot(''); setMountPoint(null); setMode('replace')
+        setCategory(activePart?.category || 'all')
+        return
+      }
+      if (selectedMarker && selectedMarker.accessoryId !== owner.id) setSelectedMarker({ ...selectedMarker, accessoryId: owner.id })
+      if (selected !== accessoryKey(owner)) setSelected(accessoryKey(owner))
+      setMode(slot?.hookup ? 'replace' : 'add')
     } else if (selectedMarker?.kind === 'part') {
-      const parts = state.truck.accessories.filter(part => part.category === selectedMarker.category)
+      const parts = state.truck.accessories.filter(part => part.category === selectedMarker.category && part.vehicleId === selectedMarker.vehicleId)
       const fitted = parts.find(part => part.id === state.editedAccessoryId) || parts.find(part => part.id === selectedMarker.accessoryId) || parts[0]
       if (fitted) {
         if (selectedMarker.accessoryId !== fitted.id) setSelectedMarker({ ...selectedMarker, accessoryId: fitted.id })
-        setSelected(fitted.id); setMountPoint(null); setMode('replace')
+        setSelected(accessoryKey(fitted)); setMountPoint(null); setMode('replace')
       } else {
         const empty = selectedMarker.accessoryId ? { ...selectedMarker, accessoryId: null } : selectedMarker
         if (empty !== selectedMarker) setSelectedMarker(empty)
         setMountPoint(empty); setMode('add')
       }
     }
-  }, [state?.revision, chosenSlot, selectedMarker])
+  }, [state?.revision, chosenSlot, selected, selectedMarker?.vehicleId, selectedMarker?.accessoryId, selectedMarker?.kind, selectedMarker?.category])
   React.useEffect(() => { localStorage.setItem('yard.advanced', String(advanced)) }, [advanced])
   React.useEffect(() => { localStorage.setItem('yard.showDuplicates', String(showDuplicates)) }, [showDuplicates])
   React.useEffect(() => {
@@ -219,7 +241,7 @@ function App() {
       return sequence === truckSelectSequence.current ? next : null
     })
   }
-  const edit = body => { sceneCancel.current?.(); return run('Applying change', () => send('/api/edit', { ...revisionGuard(), truckId: state?.truck?.id, ...body })) }
+  const edit = body => { sceneCancel.current?.(); return run('Applying change', () => send('/api/edit', { ...revisionGuard(), truckId: selectedVehicleId, ...body })) }
   const save = () => run('Writing save', async () => {
     const currentStatus = await api('/api/status')
     setStatus(currentStatus)
@@ -246,13 +268,13 @@ function App() {
   }, [state?.dirty])
 
   React.useEffect(() => {
-    if (category !== 'paint_job' || !state?.truck?.brand) return
+    if (category !== 'paint_job' || !activeSection?.brand) return
     const controller = new AbortController()
     setPaints([])
     setPaintsLoading(true)
-    api(`/api/paints?brand=${encodeURIComponent(state.truck.brand)}`, { signal: controller.signal }).then(setPaints).catch(error => { if (error.name !== 'AbortError') reportError(error.message) }).finally(() => { if (!controller.signal.aborted) setPaintsLoading(false) })
+    api(`/api/paints?brand=${encodeURIComponent(activeSection.brand)}`, { signal: controller.signal }).then(setPaints).catch(error => { if (error.name !== 'AbortError') reportError(error.message) }).finally(() => { if (!controller.signal.aborted) setPaintsLoading(false) })
     return () => controller.abort()
-  }, [category, state?.truck?.brand, assetVersion])
+  }, [category, activeSection?.brand, assetVersion])
   const matching = React.useMemo(() => (category === 'paint_job' ? paints : catalog).filter(item => {
     if (item.suitableFor?.length) {
       const cabin = previewCab
@@ -268,17 +290,20 @@ function App() {
     for (const item of matching) {
       const key = item.duplicateKey || item.path
       const existing = unique.get(key)
-      const rank = item.path === activePart?.dataPath ? 2 : item.brand === state?.truck?.brand ? 1 : 0
-      const previousRank = existing?.path === activePart?.dataPath ? 2 : existing?.brand === state?.truck?.brand ? 1 : 0
+      const rank = item.path === activePart?.dataPath ? 2 : item.brand === activeSection?.brand ? 1 : 0
+      const previousRank = existing?.path === activePart?.dataPath ? 2 : existing?.brand === activeSection?.brand ? 1 : 0
       if (!existing || rank > previousRank) unique.set(key, item)
     }
     return [...unique.values()]
-  }, [matching, showDuplicates, activePart?.dataPath, state?.truck?.brand])
+  }, [matching, showDuplicates, activePart?.dataPath, activeSection?.brand])
   const shownIssues = [...new Set([...(state?.issues || []), ...sceneIssues])]
   const applyDefinition = item => {
     if (!state?.truck) return
-    if (item.category === 'paint_job' && paintPart) { setSelected(paintPart.id); edit({ op: 'paint', accessoryId: paintPart.id, dataPath: item.path }); return }
-    if (chosenSlot && (mode === 'add' || mode === 'replace') && activePart) { edit({ op: 'hookup', accessoryId: activePart.id, slotName: chosenSlot, hookup: item.unitId }); return }
+    if (item.category === 'paint_job' && paintPart) { setSelected(accessoryKey(paintPart)); edit({ op: 'paint', accessoryId: paintPart.id, dataPath: item.path }); return }
+    if (chosenSlot && (mode === 'add' || mode === 'replace')) {
+      if (activePart?.fields?.slot_name === undefined || activePart?.fields?.slot_hookup === undefined || selectedMarker && accessoryKey(activePart) !== accessoryKey(selectedMarker)) return
+      edit({ op: 'hookup', accessoryId: activePart.id, slotName: chosenSlot, hookup: item.unitId }); return
+    }
     if (mode === 'replace' && activePart) edit({ op: 'replace', accessoryId: activePart.id, dataPath: item.path })
     else if (mode === 'add') edit({ op: 'add', dataPath: item.path })
     else if (mode === 'duplicate' && activePart) edit({ op: 'duplicate', accessoryId: activePart.id, dataPath: item.path })
@@ -325,21 +350,21 @@ function App() {
       <aside className="installed-panel">
         <div className="panel-heading"><div><div className="eyebrow">Garage</div><h1>Installed parts</h1></div><span className="count-pill">{state?.truck?.accessories?.length ?? '—'}</span></div>
         {state?.trucks?.length > 0 && <details className="vehicle-picker" ref={vehiclePicker} key={state.sessionId} onKeyDown={event => { if (event.key === 'Escape') { event.currentTarget.removeAttribute('open'); event.currentTarget.querySelector('summary').focus() } }}>
-          <summary aria-label="Choose truck or trailer">{state.truck?.kind === 'trailer' ? <Container size={16}/> : <Truck size={16}/>}<span>{state.truck?.name}{state.truck?.section > 1 && ` · Section ${state.truck.section}`}{state.truck?.plate && ` · ${state.truck.plate}`}</span><ChevronDown size={14}/></summary>
+          <summary aria-label="Choose truck or trailer">{state.truck?.kind === 'trailer' ? <Container size={16}/> : <Truck size={16}/>}<span>{state.truck?.name}{state.truck?.sectionCount > 1 && ` · ${state.truck.sectionCount} sections`}{state.truck?.plate && ` · ${state.truck.plate}`}</span><ChevronDown size={14}/></summary>
           <div className="vehicle-menu">
             <details className="vehicle-group" open><summary><Truck size={15}/> Trucks <span>{state.trucks.length}</span></summary><div>{state.trucks.map(vehicle => <button key={vehicle.id} className={state.truck?.id === vehicle.id ? 'selected' : ''} aria-pressed={state.truck?.id === vehicle.id} disabled={!!busy} onClick={() => selectTruck(vehicle.id)}><span>{vehicle.name}</span><small>{vehicle.plate || 'Owned truck'}</small>{state.truck?.id === vehicle.id && <Check size={14}/>}</button>)}</div></details>
-            <details className="vehicle-group"><summary><Container size={15}/> Trailers <span>{state.trailers?.length ?? '?'}</span></summary><div>{state.trailers?.map(vehicle => <button key={vehicle.id} className={state.truck?.id === vehicle.id ? 'selected' : ''} aria-pressed={state.truck?.id === vehicle.id} disabled={!!busy} onClick={() => selectTruck(vehicle.id)}><span>{vehicle.name}{vehicle.section > 1 && ` · Section ${vehicle.section}`}</span><small>{vehicle.plate || 'Owned trailer'}</small>{state.truck?.id === vehicle.id && <Check size={14}/>}</button>)}{!state.trailers?.length && <p>{state.trailers ? 'No owned trailers in this save.' : 'Restart the local S Garage server to load trailers, then reload this page.'}</p>}</div></details>
+            <details className="vehicle-group"><summary><Container size={15}/> Trailers <span>{state.trailers?.length ?? '?'}</span></summary><div>{state.trailers?.map(vehicle => <button key={vehicle.id} className={state.truck?.id === vehicle.id ? 'selected' : ''} aria-pressed={state.truck?.id === vehicle.id} disabled={!!busy} onClick={() => selectTruck(vehicle.id)}><span>{vehicle.name}{vehicle.sectionCount > 1 && ` · ${vehicle.sectionCount} sections`}</span><small>{vehicle.plate || 'Owned trailer'}</small>{state.truck?.id === vehicle.id && <Check size={14}/>}</button>)}{!state.trailers?.length && <p>{state.trailers ? 'No owned trailers in this save.' : 'Restart the local S Garage server to load trailers, then reload this page.'}</p>}</div></details>
           </div>
         </details>}
         {state?.truck && <div className="truck-info"><span className="truck-badge">{state.truck.kind === 'trailer' ? <Container size={21}/> : <Truck size={21}/>}</span><div><b>{state.truck.name}</b><small>{advanced && state.truck.brand ? `${state.truck.brand} · ` : ''}{state.truck.plate || (state.truck.kind === 'trailer' ? 'Trailer ready' : 'Truck ready')}</small></div><span className="truck-angle">↗</span></div>}
         <div className="part-list-title"><span>Installed components</span><span>{state?.truck?.accessories?.length || 0}</span></div>
-        <div className="part-list">{state?.truck?.accessories?.map((part, index) => <button className={`part-row ${activePart?.id === part.id ? 'selected' : ''}`} key={part.id} onClick={() => { setSelectedMarker(null); setSelected(part.id); setChosenSlot(''); setMountPoint(null); setMode('replace'); setBrand('all'); setQuery(''); setCategory(part.category || 'all') }}>
-          <span className="part-icon">{part.category?.toLowerCase().includes('wheel') || part.category?.toLowerCase().includes('tyre') ? <Disc3 size={17}/> : part.category?.toLowerCase().includes('engine') ? <Cpu size={17}/> : <Layers3 size={17}/>}</span><span className="part-copy"><b>{partLabel(part)}</b><small>{friendlyCategory(part.category || part.type)}</small></span><ChevronRight size={14} className="part-arrow"/>
+        <div className="part-list">{state?.truck?.accessories?.map((part, index) => <button className={`part-row ${accessoryKey(activePart) === accessoryKey(part) ? 'selected' : ''}`} key={accessoryKey(part)} onClick={() => { setSelectedMarker(null); setSelected(accessoryKey(part)); setChosenSlot(''); setMountPoint(null); setMode('replace'); setBrand('all'); setQuery(''); setCategory(part.category || 'all') }}>
+          <span className="part-icon">{part.category?.toLowerCase().includes('wheel') || part.category?.toLowerCase().includes('tyre') ? <Disc3 size={17}/> : part.category?.toLowerCase().includes('engine') ? <Cpu size={17}/> : <Layers3 size={17}/>}</span><span className="part-copy"><b>{partLabel(part)}</b><small>{state.truck.sections?.length > 1 && `Section ${part.section} \u00b7 `}{friendlyCategory(part.category || part.type)}</small></span><ChevronRight size={14} className="part-arrow"/>
         </button>)}</div>
-        {activePart && <section className="part-detail"><div className="detail-overline"><span>{advanced ? 'Selected component' : 'Selected part'}</span><button title="Remove component" aria-label="Remove component" onClick={() => edit({ op: 'remove', accessoryId: activePart.id })}><X size={15}/></button></div><h2>{partLabel(activePart)}</h2>{advanced && <p className="path-text">{activePart.dataPath}</p>}
+        {activePart && <section className="part-detail" key={accessoryKey(activePart)}><div className="detail-overline"><span>{state.truck.sections?.length > 1 ? `Section ${activePart.section} \u00b7 ` : ''}{advanced ? 'Selected component' : 'Selected part'}</span><button title="Remove component" aria-label="Remove component" onClick={() => edit({ op: 'remove', accessoryId: activePart.id })}><X size={15}/></button></div><h2>{partLabel(activePart)}</h2>{advanced && <p className="path-text">{activePart.dataPath}</p>}
           <div className="detail-metrics"><div><span>Category</span><b>{friendlyCategory(activePart.category || activePart.type)}</b></div><div><span>Instances</span><b>{state?.truck?.accessoryCount ?? state?.truck?.accessories?.length}</b></div></div>
           {activePart.category === 'paint_job' && <PaintControls part={activePart} busy={!!busy} edit={edit} onFailure={reportError}/>}
-          {activePart.slots?.length > 0 && <div className="slot-block"><div className="slot-heading"><span>Attachment points</span><span>{activePart.slots.length}</span></div>{activePart.slots.map((slot, index) => { const hookup = catalog.find(item => item.unitId === slot.hookup); return <div className="slot-entry" key={`${slot.name}:${index}`}><button className={`slot-row ${chosenSlot === slot.name ? 'slot-chosen' : ''}`} onClick={() => { setSelectedMarker({ accessoryId: activePart.id, name: slot.name, kind: 'hookup' }); setChosenSlot(slot.name); setMountPoint(null); setMode('add'); if (category !== 'hookup') { setCategory('hookup'); setBrand('all'); setQuery('') } }}><span className="slot-lamp"/><span>{friendlySlot(slot.name)}</span><code>{advanced ? slot.hookup || 'Empty' : hookup?.name || (slot.hookup ? 'Installed' : 'Empty')}</code></button><button className="slot-remove" aria-label={`Remove attachment from ${friendlySlot(slot.name)}`} title="Remove this attachment. Undo is available." onClick={() => edit({ op: 'hookup', accessoryId: activePart.id, slotName: slot.name, index, hookup: '' })}><X size={13}/></button></div>})}</div>}
+          {activePart.slots?.length > 0 && <div className="slot-block"><div className="slot-heading"><span>Attachment points</span><span>{activePart.slots.length}</span></div>{activePart.slots.map((slot, index) => { const hookup = catalog.find(item => item.unitId === slot.hookup); return <div className="slot-entry" key={`${slot.name}:${index}`}><button className={`slot-row ${chosenSlot === slot.name ? 'slot-chosen' : ''}`} onClick={() => { setSelectedMarker({ vehicleId: activePart.vehicleId, section: activePart.section, accessoryId: activePart.id, name: slot.name, kind: 'hookup' }); setChosenSlot(slot.name); setMountPoint(null); setMode('add'); if (category !== 'hookup') { setCategory('hookup'); setBrand('all'); setQuery('') } }}><span className="slot-lamp"/><span>{friendlySlot(slot.name)}</span><code>{advanced ? slot.hookup || 'Empty' : hookup?.name || (slot.hookup ? 'Installed' : 'Empty')}</code></button><button className="slot-remove" aria-label={`Remove attachment from ${friendlySlot(slot.name)}`} title="Remove this attachment. Undo is available." onClick={() => edit({ op: 'hookup', accessoryId: activePart.id, slotName: slot.name, index, hookup: '' })}><X size={13}/></button></div>})}</div>}
           {advanced && Object.keys(activePart.fields || {}).length > 0 && <details className="field-editor"><summary><SlidersHorizontal size={13}/> Raw instance fields <ChevronDown size={13}/></summary><div className="fields-scroll">{Object.entries(activePart.fields).filter(([key]) => !/^(id|accessory|parent|_)/i.test(key)).map(([key, value]) => <label key={key}><span>{pretty(key)}</span><input defaultValue={value} onBlur={e => e.target.value !== value && edit({ op: 'fields', accessoryId: activePart.id, fields: { [key]: e.target.value } })}/></label>)}</div></details>}
           <div className="component-actions"><button title="Duplicate installed part" onClick={() => edit({ op: 'duplicate', accessoryId: activePart.id })}><CopyIcon/> DUPLICATE</button><button title="Replace from catalog" onClick={() => { setMode('replace'); setCatalogOpen(true) }}><ArrowLeftRight size={14}/> REPLACE</button></div>
         </section>}
@@ -348,15 +373,15 @@ function App() {
       </aside>
 
       <section className="viewport-panel">
-        <div className="viewport-header"><div><span className="eyebrow">{state?.truck?.kind === 'trailer' ? 'Trailer model' : 'Truck model'}</span><h2>{state?.truck?.name || 'Truck inspection'}</h2>{advanced && state?.truck?.brand && <span className="truck-make">{state.truck.brand}</span>}</div><div className="preview-controls">{paintPart && <button className="paint-open" onClick={() => { setSelected(paintPart.id); setSelectedMarker(null); setChosenSlot(''); setMountPoint(null); setCategory('paint_job'); setBrand(state.truck.brand); setQuery(''); setCatalogOpen(true) }}>Paint</button>}<label>Lights<select aria-label="Preview lights" value={lightMode} onChange={event => setLightMode(event.target.value)}><option value="off">Off</option><option value="low">Low</option><option value="high">High</option></select></label><label>Markers<select aria-label="Marker visibility" value={markerVisibility} onChange={event => setMarkerVisibility(event.target.value)}><option value="all">All</option><option value="selected">Selected only</option><option value="hidden">Hidden</option></select></label></div></div>
-        <div className="scene-wrap">{state?.truck ? <React.Suspense fallback={<div className="scene-wait" role="status">Loading the 3D viewer...</div>}><GarageScene onLoading={onSceneLoading} lightMode={lightMode} markerVisibility={markerVisibility} key={`${state.sessionId}:${state.truck.id}`} truckKey={`${state.sessionId}:${state.truck.id}`} sceneRevision={state.revision} sessionId={state.sessionId} truckId={state.truck.id} cancelRef={sceneCancel} selectedAccessoryId={activePart?.id} selectedMarker={selectedMarker} markerLabel={point => point.kind === 'hookup' ? `${friendlyCategory(state.truck.accessories.find(part => part.id === point.accessoryId)?.category)} / ${friendlySlot(point.name)}` : friendlyCategory(point.category || point.name)} onPick={point => {
+        <div className="viewport-header"><div><span className="eyebrow">{state?.truck?.kind === 'trailer' ? 'Trailer model' : 'Truck model'}</span><h2>{state?.truck?.name || 'Truck inspection'}</h2>{advanced && activeSection?.brand && <span className="truck-make">{activeSection.brand}</span>}</div><div className="preview-controls">{paintPart && <button className="paint-open" onClick={() => { setSelected(accessoryKey(paintPart)); setSelectedMarker(null); setChosenSlot(''); setMountPoint(null); setCategory('paint_job'); setBrand(activeSection.brand); setQuery(''); setCatalogOpen(true) }}>Paint</button>}<label>Lights<select aria-label="Preview lights" value={lightMode} onChange={event => setLightMode(event.target.value)}><option value="off">Off</option><option value="low">Low</option><option value="high">High</option></select></label><label>Markers<select aria-label="Marker visibility" value={markerVisibility} onChange={event => setMarkerVisibility(event.target.value)}><option value="all">All</option><option value="selected">Selected only</option><option value="hidden">Hidden</option></select></label></div></div>
+        <div className="scene-wrap">{state?.truck ? <React.Suspense fallback={<div className="scene-wait" role="status">Loading the 3D viewer...</div>}><GarageScene onLoading={onSceneLoading} lightMode={lightMode} markerVisibility={markerVisibility} key={`${state.sessionId}:${state.truck.id}`} truckKey={`${state.sessionId}:${state.truck.id}`} sceneRevision={state.revision} sessionId={state.sessionId} truckId={state.truck.id} cancelRef={sceneCancel} selectedVehicleId={activePart?.vehicleId} selectedAccessoryId={activePart?.id} selectedMarker={selectedMarker} markerLabel={point => `${state.truck.sections?.length > 1 ? `Section ${point.section} \u00b7 ` : ''}${point.kind === 'hookup' ? `${friendlyCategory(state.truck.accessories.find(part => part.id === point.accessoryId && part.vehicleId === point.vehicleId)?.category)} / ${friendlySlot(point.name)}` : friendlyCategory(point.category || point.name)}`} onPick={point => {
           setSelectedMarker(point.kind ? point : null)
-          const part = state.truck.accessories.find(item => item.id === point.accessoryId)
+          const part = state.truck.accessories.find(item => item.id === point.accessoryId && item.vehicleId === point.vehicleId)
           const nextCategory = point.kind === 'hookup' ? 'hookup' : part?.category || point.category || 'all'
           if (nextCategory !== category) { setCategory(nextCategory); setBrand('all'); setQuery('') }
-          if (point.kind === 'hookup') { setSelected(point.accessoryId); setChosenSlot(point.name); setMountPoint(null); setMode('add') }
-          else if (point.kind === 'part') { setChosenSlot(''); if (point.accessoryId) { setSelected(point.accessoryId); setMountPoint(null); setMode('replace') } else { setMountPoint(point); setMode('add') } }
-          else if (point.accessoryId) { setSelected(point.accessoryId); setChosenSlot(''); setMountPoint(null); setMode('replace') }
+          if (point.kind === 'hookup') { setSelected(accessoryKey(point)); setChosenSlot(point.name); setMountPoint(null); setMode('add') }
+          else if (point.kind === 'part') { setChosenSlot(''); if (point.accessoryId) { setSelected(accessoryKey(point)); setMountPoint(null); setMode('replace') } else { setMountPoint(point); setMode('add') } }
+          else if (point.accessoryId) { setSelected(accessoryKey(point)); setChosenSlot(''); setMountPoint(null); setMode('replace') }
         }} onFailure={reportError} onIssues={setSceneIssues} /></React.Suspense> : <div className="scene-empty"><div className="scan-glyph"><Truck size={39}/><span/></div><b>Waiting for a truck</b><p>Open a save to inspect the truck geometry from your game files.</p></div>}
           <div className="scene-vignette"/>{advanced && <div className="scene-label"><span className="scene-live"/> GEOMETRY STREAM <span className="scene-label-sep">·</span> MODEL DATA</div>}
           {!guideOpen && <LoadingProgress requests={[...loadingJobs, ...(sceneLoading ? [sceneLoading] : [])]}/>}
@@ -369,7 +394,7 @@ function App() {
         <div className="catalog-heading"><div><div className="eyebrow">PARTS DEPARTMENT / 03</div><h2>Catalog</h2></div><button className="icon-button" onClick={() => setCatalogOpen(!catalogOpen)} aria-label={catalogOpen ? 'Collapse catalog' : 'Expand catalog'} aria-expanded={catalogOpen}><PanelLeftClose size={16} style={{ transform: catalogOpen ? 'scaleX(-1)' : 'none' }}/></button></div>
         {catalogOpen && <>{category !== 'paint_job' && <div className="catalog-mode"><button className={mode === 'replace' ? 'active' : ''} onClick={() => { setMode('replace'); if (!chosenSlot) { setSelectedMarker(null); setChosenSlot(''); setMountPoint(null) } }}><ArrowLeftRight size={14}/> Replace</button><button className={mode === 'add' ? 'active' : ''} onClick={() => setMode('add')}><Plus size={15}/> Add</button><button className={mode === 'duplicate' ? 'active' : ''} onClick={() => { setSelectedMarker(null); setMode('duplicate'); setChosenSlot(''); setMountPoint(null) }}><CopyIcon/> Copy</button></div>}
           <label className="search-box"><Search size={16}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search parts, brands…"/><kbd>/</kbd></label>
-          <div className="filter-row"><label><Filter size={13}/><select aria-label="Filter category" value={category} onChange={e => setCategory(e.target.value)}><option value="all">All categories</option>{categories.map(c => <option key={c} value={c}>{friendlyCategory(c)}</option>)}</select><ChevronDown size={12}/></label><label><select aria-label="Filter brand" disabled={category === 'paint_job'} value={category === 'paint_job' ? state?.truck?.brand || brand : brand} onChange={e => setBrand(e.target.value)}><option value="all">All makes</option>{brands.map(b => <option key={b} value={b}>{brandLabel(b)}</option>)}</select><ChevronDown size={12}/></label></div>
+          <div className="filter-row"><label><Filter size={13}/><select aria-label="Filter category" value={category} onChange={e => setCategory(e.target.value)}><option value="all">All categories</option>{categories.map(c => <option key={c} value={c}>{friendlyCategory(c)}</option>)}</select><ChevronDown size={12}/></label><label><select aria-label="Filter brand" disabled={category === 'paint_job'} value={category === 'paint_job' ? activeSection?.brand || brand : brand} onChange={e => setBrand(e.target.value)}><option value="all">All makes</option>{brands.map(b => <option key={b} value={b}>{brandLabel(b)}</option>)}</select><ChevronDown size={12}/></label></div>
           {(chosenSlot || mountPoint) && <div className="target-chip"><span className="slot-lamp"/> Target: {friendlySlot(chosenSlot || mountPoint?.name || 'Mount point')}<button aria-label="Clear selected attachment point" onClick={() => { setSelectedMarker(null); setChosenSlot(''); setMountPoint(null) }}><X size={12}/></button></div>}
           <div className="catalog-result-line"><span>{filtered.length.toLocaleString()} parts</span><label className="duplicates-toggle"><input type="checkbox" checked={showDuplicates} onChange={e => setShowDuplicates(e.target.checked)}/> Show duplicates</label></div>
           <div className="catalog-grid" key={JSON.stringify([assetVersion, category, query, brand, Boolean(chosenSlot), showDuplicates, previewCab?.dataPath, previewCab?.fields.look, previewCab?.fields.variant])}>{filtered.slice(0, catalogLimit).map((item, index) => <CatalogCard paused={!!busy || loadingJobs.length > 0 || catalogLoading || !!sceneLoading} key={item.path} item={item} index={index} advanced={advanced} previewPath={item.paintFields?.paint_job_mask && previewCab ? JSON.stringify([previewCab.dataPath, previewCab.fields.look || null, previewCab.fields.variant || null, item.path]) : item.path} onChoose={() => applyDefinition(item)} onFailure={reportError} loadModel={loadModel} loadThumbnail={loadThumbnail} />)}{filtered.length === 0 && <div className="no-results"><Search size={21}/><span>{!state ? 'Open a save to load its game parts.' : catalogLoading ? 'Loading the parts catalog...' : chosenSlot ? 'No hookup definitions match this search.' : category === 'paint_job' && paintsLoading ? 'Loading paint jobs...' : 'No parts match this filter.'}</span></div>}{filtered.length > catalogLimit && <button className="load-more" onClick={() => setCatalogLimit(limit => limit + 180)}>Show next {Math.min(180, filtered.length - catalogLimit)} parts <ChevronDown size={13}/></button>}</div>
@@ -422,12 +447,13 @@ function HistoryWindow({ state, busy, history, onClose }) {
   const dialog = React.useRef(null)
   React.useEffect(() => { dialog.current.showModal() }, [])
   const entries = state?.history || [], position = state?.historyPosition || 0
+  const vehicles = [...(state?.trucks || []), ...(state?.trailers || []).flatMap(vehicle => vehicle.sections?.length > 1 ? vehicle.sections.map(section => ({ ...section, name: `${vehicle.name} - Section ${section.section}` })) : [vehicle])]
   return <dialog ref={dialog} className="history-window" onCancel={onClose} aria-labelledby="history-title">
     <div className="modal-top"><h2 id="history-title">Edit history</h2><button className="icon-button" aria-label="Close history" onClick={onClose}><X size={18}/></button></div>
     <p>Changes across all trucks and trailers in this save, for the current session. Choose a change to undo it and every change after it.</p>
     <div className="history-list"><button disabled={!position || busy} onClick={() => history('undo', position)}><span>Opened save</span><small>Undo all {position} changes</small></button>
       {entries.map((entry, index) => <button key={`${entry.time}:${index}`} className={index >= position ? 'history-undone' : ''} disabled={busy} onClick={() => history(index < position ? 'undo' : 'redo', index < position ? position - index : index - position + 1)}>
-        <span>{index + 1}. {entry.label}</span><small>{[...state.trucks, ...(state.trailers || [])].find(truck => truck.id === entry.truckId)?.name} · {new Date(entry.time).toLocaleTimeString()} · {index < position ? `Undo ${position - index}` : `Redo ${index - position + 1}`}</small>
+        <span>{index + 1}. {entry.label}</span><small>{vehicles.find(vehicle => vehicle.id === entry.truckId)?.name} · {new Date(entry.time).toLocaleTimeString()} · {index < position ? `Undo ${position - index}` : `Redo ${index - position + 1}`}</small>
       </button>)}
     </div>{!entries.length && <p>No edits yet. Your changes will appear here.</p>}
     <div className="modal-actions"><button className="text-button" onClick={onClose}>Close</button></div>

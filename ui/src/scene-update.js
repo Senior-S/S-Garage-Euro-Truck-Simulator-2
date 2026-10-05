@@ -41,7 +41,7 @@ export function updateTruckGroup(group, pointsGroup, data, onFailure, lightMode)
   const instances = group.userData.instances ||= new Map(), counts = new Map(), retained = new Set()
   const textureCache = group.userData.textureCache ||= new Map()
   for (const part of data.parts) {
-    const prefix = JSON.stringify([part.id, part.category, part.definition]), index = counts.get(prefix) || 0
+    const prefix = JSON.stringify([part.vehicleId, part.id, part.category, part.definition]), index = counts.get(prefix) || 0
     counts.set(prefix, index + 1)
     const key = `${prefix}:${index}`
     retained.add(key)
@@ -60,7 +60,7 @@ export function updateTruckGroup(group, pointsGroup, data, onFailure, lightMode)
         if (!piece.normals?.length) geometry.computeVertexNormals()
         const source = { ...piece.material, ...(piece.material?.paintable ? part.paint : null) }
         const material = buildMaterial(source, textureCache, onFailure, lightMode)
-        const mesh = new THREE.Mesh(geometry, material); mesh.userData.accessoryId = part.id; mesh.userData.category = part.category; instance.add(mesh)
+        const mesh = new THREE.Mesh(geometry, material); mesh.userData.vehicleId = part.vehicleId; mesh.userData.section = part.section; mesh.userData.accessoryId = part.id; mesh.userData.category = part.category; instance.add(mesh)
       }
       for (const locator of part.model.locators || []) {
         const hookup = locator.hookup || ''
@@ -101,7 +101,7 @@ export function updateTruckGroup(group, pointsGroup, data, onFailure, lightMode)
   const markers = pointsGroup.userData.instances ||= new Map()
   counts.clear(); retained.clear()
   for (const point of data.points) {
-    const prefix = JSON.stringify([point.accessoryId, point.kind, point.name]), index = counts.get(prefix) || 0
+    const prefix = JSON.stringify([point.vehicleId, point.accessoryId, point.kind, point.name]), index = counts.get(prefix) || 0
     counts.set(prefix, index + 1)
     const key = `${prefix}:${index}`
     retained.add(key)
@@ -113,7 +113,7 @@ export function updateTruckGroup(group, pointsGroup, data, onFailure, lightMode)
       markers.set(key, holder); pointsGroup.add(holder)
     }
     holder.position.fromArray(point.position || [0, 0, 0]); holder.quaternion.fromArray(point.rotation || [0, 0, 0, 1]); holder.scale.fromArray(point.scale || [1, 1, 1])
-    holder.userData.pick = { accessoryId: point.accessoryId, name: point.name, hookup: point.hookup, kind: point.kind, category: point.category }
+    holder.userData.pick = { vehicleId: point.vehicleId, section: point.section, accessoryId: point.accessoryId, name: point.name, hookup: point.hookup, kind: point.kind, category: point.category }
     holder.children.forEach(mesh => { mesh.userData.pick = holder.userData.pick })
   }
   for (const [key, holder] of markers) if (!retained.has(key)) { disposeObject(holder); markers.delete(key) }

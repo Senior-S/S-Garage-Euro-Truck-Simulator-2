@@ -120,21 +120,33 @@ class SaveSession:
         self.truck_ids = refs(player, "trucks")
         if not self.truck_ids:
             raise ValueError("This save has no owned trucks.")
-        self.trailer_ids = refs(player, "trailers")
+        listed_trailers = refs(player, "trailers")
+        self.trailer_ids = list(dict.fromkeys(listed_trailers))
         self.trailer_sections = {}
-        for owner_id in list(self.trailer_ids):
-            section_id = fields(self.units[owner_id][1]).get("slave_trailer", "null")
-            chain = {owner_id}
-            section = 2
+        parents = {}
+        chains = {}
+        for owner_id in listed_trailers:
+            section_id = owner_id
+            chain = []
             while section_id != "null":
                 if section_id in chain or section_id not in self.units or self.units[section_id][0] != "trailer":
                     raise ValueError("Invalid owned trailer chain.")
-                chain.add(section_id)
+                chain.append(section_id)
                 if section_id not in self.trailer_ids:
                     self.trailer_ids.append(section_id)
+                slave_id = fields(self.units[section_id][1]).get("slave_trailer", "null")
+                if slave_id != "null":
+                    if slave_id in parents and parents[slave_id] != section_id:
+                        raise ValueError("Invalid owned trailer chain.")
+                    parents[slave_id] = section_id
+                section_id = slave_id
+            chains[owner_id] = chain
+        self.trailer_chains = {owner_id: chain for owner_id, chain in chains.items() if owner_id not in parents}
+        self.trailer_owners = {}
+        for owner_id, chain in self.trailer_chains.items():
+            for section, section_id in enumerate(chain, 1):
+                self.trailer_owners[section_id] = owner_id
                 self.trailer_sections[section_id] = section
-                section_id = fields(self.units[section_id][1]).get("slave_trailer", "null")
-                section += 1
         self.vehicle_ids = self.truck_ids + self.trailer_ids
         player_fields = fields(player)
         assigned = player_fields.get("assigned_vehicles")
@@ -171,6 +183,9 @@ class SaveSession:
     def state(self) -> dict:
         trucks, trailers = [], []
         active = None
+        selected_id = self.trailer_owners.get(self.truck_id, self.truck_id)
+        selected_chain = self.trailer_chains.get(selected_id, [selected_id])
+        vehicles = {}
         for truck_id in self.vehicle_ids:
             block = self.block(truck_id)
             data = fields(block)
@@ -180,8 +195,9 @@ class SaveSession:
                 values = fields(accessory)
                 path = unquote(values["data_path"])
                 item = {"dataPath": path, "category": category(path)}
-                if truck_id == self.truck_id:
+                if truck_id in selected_chain:
                     item.update(id=unit_id, type=self.units[unit_id][0] if unit_id in self.units else UNIT.match(accessory)[1], fields=values,
+                                vehicleId=truck_id, section=self.trailer_sections.get(truck_id, 1),
                                 slots=[{"name": unquote(n), "hookup": unquote(h)} for n, h in zip(refs(accessory, "slot_name", values), refs(accessory, "slot_hookup", values))])
                 accessories.append(item)
             cabin = next((a for a in accessories if a["category"] == "cabin"), None)
@@ -190,17 +206,28 @@ class SaveSession:
             brand = base["dataPath"].split("/")[4] if base else "unknown"
             plate = re.sub(r"<[^>]+>", "", unquote(data.get("license_plate", '""')).split("|")[0]).strip().rstrip(".")
             truck = {"id": truck_id, "name": brand.replace(".", " ").replace("_", " ").title(),
-                     "kind": kind, "section": self.trailer_sections.get(truck_id, 1), "brand": brand, "plate": plate, "accessoryCount": len(accessories), "selected": truck_id == self.truck_id}
-            (trailers if kind == "trailer" else trucks).append(truck)
-            if truck_id == self.truck_id:
-                active = {**truck, "accessories": accessories}
+                     "kind": kind, "section": self.trailer_sections.get(truck_id, 1), "brand": brand, "plate": plate, "accessoryCount": len(accessories), "selected": truck_id == selected_id}
+            vehicles[truck_id] = {**truck, "accessories": accessories}
+            if kind == "truck":
+                trucks.append(truck)
+        for owner_id, chain in self.trailer_chains.items():
+            root = vehicles[owner_id]
+            summary = {key: value for key, value in root.items() if key != "accessories"}
+            summary.update(sectionCount=len(chain), accessoryCount=sum(vehicles[section_id]["accessoryCount"] for section_id in chain),
+                           sections=[{key: value for key, value in vehicles[section_id].items() if key != "accessories"} for section_id in chain])
+            trailers.append(summary)
+            if owner_id == selected_id:
+                active = {**summary, "sections": [vehicles[section_id] for section_id in chain],
+                          "accessories": [accessory for section_id in chain for accessory in vehicles[section_id]["accessories"]]}
+        if active is None:
+            active = vehicles.get(selected_id)
         return {"sessionId": self.session_id, "saveId": self.save_id, "saveName": self.name,
                 "trucks": trucks, "trailers": trailers, "truck": active, "canUndo": bool(self.undo_stack), "canRedo": bool(self.redo_stack),
                 "dirty": self.overrides != self.saved, "revision": self.revision,
                 "history": self.undo_entries + list(reversed(self.redo_entries)), "historyPosition": len(self.undo_entries)}
 
     def edit(self, request: dict, catalog: dict[str, dict]) -> dict:
-        truck_id = request.get("truckId", self.truck_id)
+        truck_id = request.get("truckId", self.trailer_owners.get(self.truck_id, self.truck_id))
         if truck_id not in self.vehicle_ids:
             raise ValueError("Choose an owned truck or trailer from this save.")
         changes = dict(self.overrides)
@@ -355,8 +382,9 @@ class SaveSession:
             self.redo_entries.clear()
             self.overrides = changes
             self.revision += 1
-        self.truck_id = truck_id
-        return {**self.state(), "editedAccessoryId": new_id if op in ("add", "duplicate") else unit_id if op != "remove" else None}
+        self.truck_id = self.trailer_owners.get(truck_id, truck_id)
+        return {**self.state(), "editedVehicleId": truck_id,
+                "editedAccessoryId": new_id if op in ("add", "duplicate") else unit_id if op != "remove" else None}
 
     def history(self, redo: bool = False, steps: int = 1) -> dict:
         source, target = (self.redo_stack, self.undo_stack) if redo else (self.undo_stack, self.redo_stack)
@@ -368,7 +396,7 @@ class SaveSession:
             self.overrides = source.pop()
             entry = entries.pop()
             destination.append(entry)
-            self.truck_id = entry["truckId"]
+            self.truck_id = self.trailer_owners.get(entry["truckId"], entry["truckId"])
             self.revision += 1
         return self.state()
 

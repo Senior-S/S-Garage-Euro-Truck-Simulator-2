@@ -271,7 +271,7 @@ class Handler(BaseHTTPRequestHandler):
                         session = garage.require_session()
                         if body["truckId"] not in session.vehicle_ids:
                             raise ValueError("Vehicle not found in this save.")
-                        session.truck_id = body["truckId"]
+                        session.truck_id = session.trailer_owners.get(body["truckId"], body["truckId"])
                         result = session.state()
                     elif parsed.path == "/api/edit":
                         if body.get("op") == "hookup" and body.get("hookup"):
@@ -280,7 +280,10 @@ class Handler(BaseHTTPRequestHandler):
                                 raise ValueError("Choose an installed hookup from the parts catalog.")
                         definitions = {item["path"]: item for item in garage.assets.catalog()}
                         if body.get("op") == "paint":
-                            accessory = next((part for part in garage.require_session().state()["truck"]["accessories"] if part["id"] == body.get("accessoryId")), None)
+                            session = garage.require_session()
+                            owner_id = body.get("truckId", session.truck_id)
+                            accessory = next((part for part in session.state()["truck"]["accessories"]
+                                              if part["id"] == body.get("accessoryId") and part["vehicleId"] == owner_id), None)
                             path = body.get("dataPath") or (accessory or {}).get("dataPath")
                             old_path = (accessory or {}).get("dataPath")
                             if old_path in definitions and old_path != path:

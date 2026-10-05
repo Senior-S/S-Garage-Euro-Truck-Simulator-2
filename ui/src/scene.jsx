@@ -12,14 +12,14 @@ function frameTruck(camera, controls, size, center) {
   camera.position.copy(center).add(new THREE.Vector3(distance * .56, size.y * .5 + distance * .31, -distance * .76))
 }
 
-export default function GarageScene({ onPick, onFailure, onIssues, onLoading, markerLabel, selectedAccessoryId, selectedMarker, truckKey, sceneRevision, sessionId, truckId, cancelRef, lightMode = 'off', markerVisibility = 'all' }) {
+export default function GarageScene({ onPick, onFailure, onIssues, onLoading, markerLabel, selectedAccessoryId, selectedVehicleId, selectedMarker, truckKey, sceneRevision, sessionId, truckId, cancelRef, lightMode = 'off', markerVisibility = 'all' }) {
   const host = React.useRef(null)
   const modelGroup = React.useRef(null)
   const runtime = React.useRef(null)
   const callbacks = React.useRef({ onPick, onFailure, onIssues, onLoading }); callbacks.current = { onPick, onFailure, onIssues, onLoading }
-  const selectedRef = React.useRef(null); selectedRef.current = { id: selectedAccessoryId, marker: selectedMarker }
+  const selectedRef = React.useRef(null); selectedRef.current = { id: selectedAccessoryId, vehicleId: selectedVehicleId, marker: selectedMarker }
   const previewRef = React.useRef(null); previewRef.current = { lightMode, markerVisibility }
-  const highlight = ({ id, marker }) => modelGroup.current?.traverse(object => {
+  const highlight = ({ id, vehicleId, marker }) => modelGroup.current?.traverse(object => {
     if (object.userData.lightModeMinimum) {
       object.visible = ['off', 'low', 'high'].indexOf(previewRef.current.lightMode) >= object.userData.lightModeMinimum
       return
@@ -27,7 +27,7 @@ export default function GarageScene({ onPick, onFailure, onIssues, onLoading, ma
     if (!object.isMesh) return
     if (object.userData.pick) {
       const point = object.userData.pick
-      const selected = marker && point.accessoryId === marker.accessoryId && point.name === marker.name && point.kind === marker.kind
+      const selected = marker && point.vehicleId === marker.vehicleId && point.accessoryId === marker.accessoryId && point.name === marker.name && point.kind === marker.kind
       object.parent.visible = previewRef.current.markerVisibility === 'all' || previewRef.current.markerVisibility === 'selected' && Boolean(selected)
       object.material.color.setHex(selected ? 0xffc46b : 0xc7ddff)
       object.material.opacity = selected ? 1 : object.geometry.type === 'TorusGeometry' ? .76 : .96
@@ -36,7 +36,7 @@ export default function GarageScene({ onPick, onFailure, onIssues, onLoading, ma
     }
     if (!object.userData.accessoryId) return
     const materials = Array.isArray(object.material) ? object.material : [object.material]
-    const selected = !marker && object.userData.accessoryId === id
+    const selected = !marker && object.userData.vehicleId === vehicleId && object.userData.accessoryId === id
     materials.forEach(material => { if (material.emissive) { material.emissive.setHex(selected ? 0x526c95 : 0x000000); material.emissiveIntensity = selected ? .3 : 0 } })
   })
   const [loading, setLoading] = React.useState(true)
@@ -87,7 +87,7 @@ export default function GarageScene({ onPick, onFailure, onIssues, onLoading, ma
       candidates.sort((a, b) => a.distance - b.distance)
       if (candidates.length > 1) setMarkerChoices({ x: Math.max(0, Math.min(event.clientX - rect.left, rect.width - 230)), y: Math.max(0, Math.min(event.clientY - rect.top, rect.height - 220)), points: candidates.map(candidate => candidate.holder.userData.pick) })
       else if (candidates.length) callbacks.current.onPick?.(candidates[0].holder.userData.pick)
-      else { const partHit = raycaster.intersectObjects(group.children, true).find(item => item.object.userData.accessoryId); if (partHit) callbacks.current.onPick?.({ accessoryId: partHit.object.userData.accessoryId, category: partHit.object.userData.category }) }
+      else { const partHit = raycaster.intersectObjects(group.children, true).find(item => item.object.userData.accessoryId); if (partHit) callbacks.current.onPick?.({ vehicleId: partHit.object.userData.vehicleId, section: partHit.object.userData.section, accessoryId: partHit.object.userData.accessoryId, category: partHit.object.userData.category }) }
     }
     renderer.domElement.addEventListener('pointerdown', pointerDown)
     renderer.domElement.addEventListener('pointermove', pointerMove)
@@ -161,6 +161,6 @@ export default function GarageScene({ onPick, onFailure, onIssues, onLoading, ma
     if (runtime.current) runtime.current.lightMode.value = ['off', 'low', 'high'].indexOf(lightMode)
     highlight(selectedRef.current)
     setMarkerChoices(null)
-  }, [selectedAccessoryId, selectedMarker, markerVisibility, lightMode, truckKey])
+  }, [selectedAccessoryId, selectedVehicleId, selectedMarker, markerVisibility, lightMode, truckKey])
   return <><div ref={host} className="three-host" aria-label="Interactive truck model. Drag to orbit and scroll to zoom."/>{markerChoices && <div className="marker-picker" role="dialog" aria-label="Choose attachment point" style={{ left: markerChoices.x, top: markerChoices.y }}><div className="marker-picker-heading"><span>Choose attachment point</span><button aria-label="Close attachment chooser" onClick={() => setMarkerChoices(null)}>×</button></div><div className="marker-picker-options">{markerChoices.points.map((point, index) => <button key={index} onClick={() => { setMarkerChoices(null); callbacks.current.onPick?.(point) }}>{markerLabel(point)}</button>)}</div></div>}{loading && !onLoading && <div className="scene-wait"><span className="loading-pulse"/>ASSEMBLING SAVE GEOMETRY</div>}</>
 }
