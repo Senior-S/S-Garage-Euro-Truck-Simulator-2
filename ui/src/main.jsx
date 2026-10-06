@@ -42,6 +42,7 @@ const accessoryKey = part => part ? JSON.stringify([part.vehicleId, part.id ?? p
 function App() {
   const [status, setStatus] = React.useState(null), [saves, setSaves] = React.useState([]), [state, setState] = React.useState(null), [catalog, setCatalog] = React.useState([]), [catalogLoading, setCatalogLoading] = React.useState(true)
   const [guideOpen, setGuideOpen] = React.useState(() => localStorage.getItem('yard.guideSeen') !== 'true')
+  const [update, setUpdate] = React.useState(null)
   const vehiclePicker = React.useRef(null)
   const [selectedProfile, setSelectedProfile] = React.useState(''), [selectedSaveId, setSelectedSaveId] = React.useState('')
   const [error, setError] = React.useState(''), [notice, setNotice] = React.useState(''), [busy, setBusy] = React.useState(''), [mode, setMode] = React.useState('replace'), [sceneIssues, setSceneIssues] = React.useState([])
@@ -49,6 +50,7 @@ function App() {
   const [mountPoint, setMountPoint] = React.useState(null), [selectedMarker, setSelectedMarker] = React.useState(null)
   const [settings, setSettings] = React.useState(false), [gamePath, setGamePath] = React.useState(''), [profilesPath, setProfilesPath] = React.useState(''), [decryptorPath, setDecryptorPath] = React.useState(''), [toolPath, setToolPath] = React.useState(''), [cachePath, setCachePath] = React.useState('')
   const [catalogOpen, setCatalogOpen] = React.useState(true), [historyOpen, setHistoryOpen] = React.useState(false), [paints, setPaints] = React.useState([]), [paintsLoading, setPaintsLoading] = React.useState(false)
+  const [timeOfDay, setTimeOfDay] = React.useState('day')
   const [lightMode, setLightMode] = React.useState('off'), [markerVisibility, setMarkerVisibility] = React.useState('all')
   const [showDuplicates, setShowDuplicates] = React.useState(() => localStorage.getItem('yard.showDuplicates') === 'true')
   const [catalogLimit, setCatalogLimit] = React.useState(180)
@@ -105,6 +107,13 @@ function App() {
     try { setCatalog(next.ready && next.session ? await withProgress('Loading parts catalog', id => api(`/api/catalog?requestId=${id}`)) : []) } finally { setCatalogLoading(false) }
   }, [applyState, withProgress])
   React.useEffect(() => { refresh().catch(e => setError(e.message)) }, [refresh])
+  React.useEffect(() => {
+    const controller = new AbortController()
+    api('/api/updates', { signal: controller.signal }).then(setUpdate).catch(() => {
+      if (!controller.signal.aborted) setUpdate({ status: 'unavailable', url: 'https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/releases' })
+    })
+    return () => controller.abort()
+  }, [])
   React.useEffect(() => { if (!notice) return; const id = setTimeout(() => setNotice(''), 3600); return () => clearTimeout(id) }, [notice])
   React.useEffect(() => setCatalogLimit(180), [query, category, brand, Boolean(chosenSlot), showDuplicates])
   React.useEffect(() => { setSelectedMarker(null); setChosenSlot(''); setMountPoint(null) }, [state?.sessionId, state?.truck?.id])
@@ -346,6 +355,13 @@ function App() {
       <button className="save-button" onClick={save} disabled={!state?.dirty || !!busy}><Save size={15}/><span>{busy === 'Writing save' ? 'Saving…' : 'Save changes'}</span>{state?.dirty && <i/>}</button>
     </header>
 
+    {update && update.status !== 'current' && <div className="update-notice" role="status">
+      <AlertTriangle size={16} aria-hidden="true"/>
+      <span>{update.status === 'available' ? `S Garage ${update.latestVersion} is available. You have ${update.currentVersion}.` : "Couldn't check GitHub for updates. A newer version of S Garage may be available."}</span>
+      <a href={update.url} target="_blank" rel="noopener noreferrer">View releases</a>
+      <button className="icon-button" aria-label="Dismiss update notice" onClick={() => setUpdate(null)}><X size={16}/></button>
+    </div>}
+
     <main className={`workspace ${loadingJobs.length || sceneLoading ? 'workspace-loading' : ''} ${catalogOpen ? '' : 'catalog-is-closed'}`}>
       <aside className="installed-panel">
         <div className="panel-heading"><div><div className="eyebrow">Garage</div><h1>Installed parts</h1></div><span className="count-pill">{state?.truck?.accessories?.length ?? '—'}</span></div>
@@ -373,8 +389,8 @@ function App() {
       </aside>
 
       <section className="viewport-panel">
-        <div className="viewport-header"><div><span className="eyebrow">{state?.truck?.kind === 'trailer' ? 'Trailer model' : 'Truck model'}</span><h2>{state?.truck?.name || 'Truck inspection'}</h2>{advanced && activeSection?.brand && <span className="truck-make">{activeSection.brand}</span>}</div><div className="preview-controls">{paintPart && <button className="paint-open" onClick={() => { setSelected(accessoryKey(paintPart)); setSelectedMarker(null); setChosenSlot(''); setMountPoint(null); setCategory('paint_job'); setBrand(activeSection.brand); setQuery(''); setCatalogOpen(true) }}>Paint</button>}<label>Lights<select aria-label="Preview lights" value={lightMode} onChange={event => setLightMode(event.target.value)}><option value="off">Off</option><option value="low">Low</option><option value="high">High</option></select></label><label>Markers<select aria-label="Marker visibility" value={markerVisibility} onChange={event => setMarkerVisibility(event.target.value)}><option value="all">All</option><option value="selected">Selected only</option><option value="hidden">Hidden</option></select></label></div></div>
-        <div className="scene-wrap">{state?.truck ? <React.Suspense fallback={<div className="scene-wait" role="status">Loading the 3D viewer...</div>}><GarageScene onLoading={onSceneLoading} lightMode={lightMode} markerVisibility={markerVisibility} key={`${state.sessionId}:${state.truck.id}`} truckKey={`${state.sessionId}:${state.truck.id}`} sceneRevision={state.revision} sessionId={state.sessionId} truckId={state.truck.id} cancelRef={sceneCancel} selectedVehicleId={activePart?.vehicleId} selectedAccessoryId={activePart?.id} selectedMarker={selectedMarker} markerLabel={point => `${state.truck.sections?.length > 1 ? `Section ${point.section} \u00b7 ` : ''}${point.kind === 'hookup' ? `${friendlyCategory(state.truck.accessories.find(part => part.id === point.accessoryId && part.vehicleId === point.vehicleId)?.category)} / ${friendlySlot(point.name)}` : friendlyCategory(point.category || point.name)}`} onPick={point => {
+        <div className="viewport-header"><div><span className="eyebrow">{state?.truck?.kind === 'trailer' ? 'Trailer model' : 'Truck model'}</span><h2>{state?.truck?.name || 'Truck inspection'}</h2>{advanced && activeSection?.brand && <span className="truck-make">{activeSection.brand}</span>}</div><div className="preview-controls">{paintPart && <button className="paint-open" onClick={() => { setSelected(accessoryKey(paintPart)); setSelectedMarker(null); setChosenSlot(''); setMountPoint(null); setCategory('paint_job'); setBrand(activeSection.brand); setQuery(''); setCatalogOpen(true) }}>Paint</button>}<label>Lighting<select aria-label="Time of day" value={timeOfDay} onChange={event => setTimeOfDay(event.target.value)}><option value="day">Day</option><option value="afternoon">Afternoon</option><option value="night">Night</option></select></label><label>Lights<select aria-label="Preview lights" value={lightMode} onChange={event => setLightMode(event.target.value)}><option value="off">Off</option><option value="low">Low</option><option value="high">High</option></select></label><label>Markers<select aria-label="Marker visibility" value={markerVisibility} onChange={event => setMarkerVisibility(event.target.value)}><option value="all">All</option><option value="selected">Selected only</option><option value="hidden">Hidden</option></select></label></div></div>
+        <div className="scene-wrap">{state?.truck ? <React.Suspense fallback={<div className="scene-wait" role="status">Loading the 3D viewer...</div>}><GarageScene onLoading={onSceneLoading} timeOfDay={timeOfDay} lightMode={lightMode} markerVisibility={markerVisibility} truckKey={`${state.sessionId}:${state.truck.id}`} sceneRevision={state.revision} sessionId={state.sessionId} truckId={state.truck.id} cancelRef={sceneCancel} selectedVehicleId={activePart?.vehicleId} selectedAccessoryId={activePart?.id} selectedMarker={selectedMarker} markerLabel={point => `${state.truck.sections?.length > 1 ? `Section ${point.section} \u00b7 ` : ''}${point.kind === 'hookup' ? `${friendlyCategory(state.truck.accessories.find(part => part.id === point.accessoryId && part.vehicleId === point.vehicleId)?.category)} / ${friendlySlot(point.name)}` : friendlyCategory(point.category || point.name)}`} onPick={point => {
           setSelectedMarker(point.kind ? point : null)
           const part = state.truck.accessories.find(item => item.id === point.accessoryId && item.vehicleId === point.vehicleId)
           const nextCategory = point.kind === 'hookup' ? 'hookup' : part?.category || point.category || 'all'

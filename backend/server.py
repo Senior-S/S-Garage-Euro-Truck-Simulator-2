@@ -22,6 +22,7 @@ from saves import SaveSession, read_sii, game_running
 from scene import build_scene, paint_material
 from mods import resolve_mods
 from progress import LoadingProgress
+from updates import check_updates
 
 
 APP = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
@@ -61,6 +62,8 @@ class Garage:
         self.catalog_lock = threading.Lock()
         self.catalog_source = None
         self.catalog_payload = None
+        self.update_result = None
+        self.update_lock = threading.Lock()
 
     def decryptor(self) -> Path | None:
         configured = self.config.get("decryptorPath") or os.environ.get("ETS_GARAGE_DECRYPTOR")
@@ -300,6 +303,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/status":
                 self.json_response(garage.status())
+            elif parsed.path == "/api/updates":
+                with garage.update_lock:
+                    if garage.update_result is None:
+                        garage.update_result = check_updates()
+                    result = garage.update_result
+                self.json_response(result)
             elif parsed.path == "/api/progress":
                 self.json_response(garage.progress.snapshot(query.get("requestId", [])[:16]))
             elif parsed.path == "/api/saves":

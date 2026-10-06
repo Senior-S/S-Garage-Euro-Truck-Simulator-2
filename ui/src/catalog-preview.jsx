@@ -38,8 +38,10 @@ async function buildModelScene(model, signal) {
       if (piece.uvs1?.length || piece.uvs?.length) geometry.setAttribute('garageUv', new THREE.Float32BufferAttribute(piece.uvs1 || piece.uvs, 2))
       if (piece.indices?.length) geometry.setIndex(piece.indices)
       if (!piece.normals?.length) geometry.computeVertexNormals()
-      const source = piece.material || {}, color = source.color || [.48, .55, .54], transparent = source.transparent || (source.opacity ?? 1) < 1
-      const material = new THREE.MeshStandardMaterial({ color: new THREE.Color(color[0], color[1], color[2]), map: textures.get(source.texture) || null, metalness: source.metalness ?? .48, roughness: source.roughness ?? .52, transparent, depthWrite: source.depthWrite ?? !transparent, alphaTest: source.alphaTest ?? 0, opacity: source.opacity ?? 1, side: THREE.DoubleSide })
+      const source = piece.material || {}, effect = (source.effect || '').split('.'), unlit = effect.includes('unlit'), additive = unlit && effect.includes('add')
+      const color = source.color || [.48, .55, .54], transparent = additive || source.transparent || (source.opacity ?? 1) < 1
+      const parameters = { color: new THREE.Color(...color), map: textures.get(source.texture) || null, transparent, depthWrite: additive ? false : source.depthWrite ?? !transparent, alphaTest: source.alphaTest ?? 0, opacity: source.opacity ?? 1, side: THREE.DoubleSide, blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending }
+      const material = unlit ? new THREE.MeshBasicMaterial(parameters) : new THREE.MeshStandardMaterial({ ...parameters, metalness: source.metalness ?? 0, roughness: source.roughness ?? .65 })
       configureGarageMaterial(material, source, textures)
       group.add(new THREE.Mesh(geometry, material))
     }

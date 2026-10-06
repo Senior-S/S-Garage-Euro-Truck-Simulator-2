@@ -12,7 +12,7 @@ function frameTruck(camera, controls, size, center) {
   camera.position.copy(center).add(new THREE.Vector3(distance * .56, size.y * .5 + distance * .31, -distance * .76))
 }
 
-export default function GarageScene({ onPick, onFailure, onIssues, onLoading, markerLabel, selectedAccessoryId, selectedVehicleId, selectedMarker, truckKey, sceneRevision, sessionId, truckId, cancelRef, lightMode = 'off', markerVisibility = 'all' }) {
+export default function GarageScene({ onPick, onFailure, onIssues, onLoading, markerLabel, selectedAccessoryId, selectedVehicleId, selectedMarker, truckKey, sceneRevision, sessionId, truckId, cancelRef, lightMode = 'off', markerVisibility = 'all', timeOfDay = 'day' }) {
   const host = React.useRef(null)
   const modelGroup = React.useRef(null)
   const runtime = React.useRef(null)
@@ -21,7 +21,9 @@ export default function GarageScene({ onPick, onFailure, onIssues, onLoading, ma
   const previewRef = React.useRef(null); previewRef.current = { lightMode, markerVisibility }
   const highlight = ({ id, vehicleId, marker }) => modelGroup.current?.traverse(object => {
     if (object.userData.lightModeMinimum) {
-      object.visible = ['off', 'low', 'high'].indexOf(previewRef.current.lightMode) >= object.userData.lightModeMinimum
+      const mode = ['off', 'low', 'high'].indexOf(previewRef.current.lightMode)
+      // Keep light counts and projection maps fixed to reuse compiled shaders.
+      object.intensity = mode >= object.userData.lightModeMinimum && mode <= (object.userData.lightModeMaximum ?? 2) ? object.userData.beamIntensity : 0
       return
     }
     if (!object.isMesh) return
@@ -42,25 +44,33 @@ export default function GarageScene({ onPick, onFailure, onIssues, onLoading, ma
   const [loading, setLoading] = React.useState(true)
   const [markerChoices, setMarkerChoices] = React.useState(null)
   React.useEffect(() => {
-    let scene, camera, renderer, controls, group, observer
+    let scene, camera, renderer, controls, group, observer, frame = 0, disposed = false
+    const requestRender = () => {
+      if (frame || disposed || document.hidden) return
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        controls.update()
+        renderer.render(scene, camera)
+      })
+    }
     scene = new THREE.Scene(); scene.background = new THREE.Color('#141820'); scene.fog = new THREE.Fog('#141820', 22, 72)
     camera = new THREE.PerspectiveCamera(35, host.current.clientWidth / Math.max(host.current.clientHeight, 1), .02, 10000); camera.position.set(9.4, 5.7, -9.4)
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false }); renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2)); renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05
     host.current.appendChild(renderer.domElement)
     const environment = new RoomEnvironment(), pmrem = new THREE.PMREMGenerator(renderer), reflection = pmrem.fromScene(environment)
-    scene.environment = reflection.texture; scene.environmentIntensity = .55
+    scene.environment = reflection.texture; scene.environmentIntensity = .18
     environment.dispose(); pmrem.dispose()
     controls = new OrbitControls(camera, renderer.domElement); controls.enableDamping = true; controls.dampingFactor = .065; controls.minDistance = 0; controls.maxDistance = 50; controls.target.set(0, 1, 0); controls.maxPolarAngle = Math.PI * .49
-    scene.add(new THREE.HemisphereLight(0xd5deeb, 0x242830, 1.85))
-    const key = new THREE.DirectionalLight(0xfff4e2, 2.8); key.position.set(-5, 12, -7); scene.add(key)
-    const fill = new THREE.DirectionalLight(0xe1e8f2, 1.4); fill.position.set(5, 4, 8); scene.add(fill)
+    const sky = new THREE.HemisphereLight(0xe2e5e9, 0x55534f, 2.1); scene.add(sky)
+    const key = new THREE.DirectionalLight(0xfff8ef, 2.8); key.position.set(-5, 12, -7); scene.add(key)
+    const fill = new THREE.DirectionalLight(0xe2e5e9, 1.2); fill.position.set(5, 4, 8); scene.add(fill)
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(180, 180), new THREE.MeshStandardMaterial({ color: '#202630', roughness: .92, metalness: .14 })); floor.rotation.x = -Math.PI / 2; floor.position.y = -.03; scene.add(floor)
     const grid = new THREE.GridHelper(64, 64, 0x444e60, 0x2d3542); grid.position.y = -.017; grid.material.transparent = true; grid.material.opacity = .2; scene.add(grid)
     group = new THREE.Group(); modelGroup.current = group; scene.add(group)
     const pointsGroup = new THREE.Group(); group.add(pointsGroup)
-    const current = { scene, camera, renderer, controls, group, pointsGroup, lightMode: { value: ['off', 'low', 'high'].indexOf(previewRef.current.lightMode) }, models: new Map(), revision: -1, initialized: false, box: new THREE.Box3() }
+    const current = { scene, camera, renderer, controls, sky, key, fill, grid, group, pointsGroup, requestRender, truckKey, lightMode: { value: ['off', 'low', 'high'].indexOf(previewRef.current.lightMode) }, models: new Map(), revision: -1, initialized: false, box: new THREE.Box3() }
     runtime.current = current
-    const resize = () => { if (!host.current || !renderer) return; const width = host.current.clientWidth, height = host.current.clientHeight; renderer.setSize(width, height, false); camera.aspect = width / Math.max(height, 1); camera.updateProjectionMatrix() }
+    const resize = () => { if (!host.current || !renderer) return; const width = host.current.clientWidth, height = host.current.clientHeight; renderer.setSize(width, height, false); camera.aspect = width / Math.max(height, 1); camera.updateProjectionMatrix(); requestRender() }
     observer = new ResizeObserver(resize); observer.observe(host.current); resize()
     const raycaster = new THREE.Raycaster(), pointer = new THREE.Vector2(), projected = new THREE.Vector3()
     let press = null, dragged = false
@@ -69,6 +79,7 @@ export default function GarageScene({ onPick, onFailure, onIssues, onLoading, ma
     const pointerUp = event => { pointerMove(event); if (press?.button > 0) dragged = true; press = null }
     const pointerCancel = () => { press = null; dragged = true }
     const click = event => {
+      if (!current.initialized) return
       if (dragged || press?.button > 0) { press = null; return }
       press = null
       const rect = renderer.domElement.getBoundingClientRect(); pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1; pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
@@ -98,11 +109,17 @@ export default function GarageScene({ onPick, onFailure, onIssues, onLoading, ma
       if (current.box.isEmpty()) { controls.target.set(0, 1, 0); camera.position.set(9.4, 5.7, -9.4) }
       else frameTruck(camera, controls, current.box.getSize(new THREE.Vector3()), current.box.getCenter(new THREE.Vector3()))
       controls.update()
+      requestRender()
     }
     window.addEventListener('yard-reset-view', reset)
-    renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera) })
+    controls.addEventListener('change', requestRender)
+    document.addEventListener('visibilitychange', requestRender)
+    requestRender()
     return () => {
       runtime.current = null; modelGroup.current = null
+      disposed = true; cancelAnimationFrame(frame)
+      controls.removeEventListener('change', requestRender)
+      document.removeEventListener('visibilitychange', requestRender)
       window.removeEventListener('yard-reset-view', reset)
       renderer.domElement.removeEventListener('click', click)
       renderer.domElement.removeEventListener('pointerdown', pointerDown)
@@ -112,10 +129,13 @@ export default function GarageScene({ onPick, onFailure, onIssues, onLoading, ma
       observer.disconnect(); controls.dispose(); renderer.setAnimationLoop(null)
       disposeObject(scene); reflection.dispose(); renderer.dispose(); renderer.forceContextLoss(); renderer.domElement.remove()
     }
-  }, [truckKey])
+  }, [])
   React.useEffect(() => {
     const current = runtime.current
     if (!current) return
+    if (current.truckKey !== truckKey) {
+      current.truckKey = truckKey; current.initialized = false; current.revision = -1
+    }
     let live = true
     const controller = new AbortController(), requestId = crypto.randomUUID()
     const cancel = () => {
@@ -139,7 +159,7 @@ export default function GarageScene({ onPick, onFailure, onIssues, onLoading, ma
         if (!model) throw new Error(`Scene update is missing model ${part.definition}. Reload the truck.`)
         return { ...part, model }
       })
-      updateTruckGroup(current.group, current.pointsGroup, { parts, points: data.points }, callbacks.current.onFailure, current.lightMode)
+      updateTruckGroup(current.group, current.pointsGroup, { parts, points: data.points }, callbacks.current.onFailure, current.lightMode, current.requestRender)
       const used = new Set(parts.map(part => part.modelKey))
       for (const key of current.models.keys()) if (!used.has(key)) current.models.delete(key)
       current.box.setFromObject(current.group)
@@ -152,14 +172,33 @@ export default function GarageScene({ onPick, onFailure, onIssues, onLoading, ma
       current.renderer.domElement.dataset.maxZoomDistance = String(current.controls.maxDistance)
       current.revision = data.revision; current.initialized = true
       highlight(selectedRef.current); current.controls.update()
+      current.requestRender()
       callbacks.current.onIssues?.(data.issues || []); setLoading(false)
     }
     update().catch(error => { if (live && error.name !== 'AbortError') { setLoading(false); callbacks.current.onFailure?.(error.message) } }).finally(() => callbacks.current.onLoading?.(requestId, false))
     return () => { cancel(); if (cancelRef?.current === cancel) cancelRef.current = null }
   }, [truckKey, sceneRevision, sessionId, truckId])
   React.useEffect(() => {
+    const current = runtime.current
+    if (!current) return
+    // Reuse the existing lights and reflection map; a preset requests one frame.
+    const preset = {
+      day: { background: '#303740', sky: 0xdce8f4, ground: 0x777369, ambient: 2.1, sun: 0xfff8ef, intensity: 2.8, position: [-5, 12, -7], fill: 1.2, reflection: .18, grid: .2 },
+      afternoon: { background: '#383039', sky: 0xe4c5aa, ground: 0x66534a, ambient: 1.1, sun: 0xffb86f, intensity: 2.4, position: [-10, 4, -6], fill: .45, reflection: .12, grid: .12 },
+      night: { background: '#080d16', sky: 0x8faacf, ground: 0x242b3c, ambient: .32, sun: 0xaac4ed, intensity: .2, position: [-5, 12, -7], fill: .14, reflection: .035, grid: .045 },
+    }[timeOfDay] || null
+    if (!preset) return
+    current.scene.background.set(preset.background); current.scene.fog.color.set(preset.background)
+    current.sky.color.setHex(preset.sky); current.sky.groundColor.setHex(preset.ground); current.sky.intensity = preset.ambient
+    current.key.color.setHex(preset.sun); current.key.intensity = preset.intensity; current.key.position.fromArray(preset.position)
+    current.fill.intensity = preset.fill; current.scene.environmentIntensity = preset.reflection; current.grid.material.opacity = preset.grid
+    current.requestRender()
+  }, [timeOfDay])
+
+  React.useEffect(() => {
     if (runtime.current) runtime.current.lightMode.value = ['off', 'low', 'high'].indexOf(lightMode)
     highlight(selectedRef.current)
+    runtime.current?.requestRender()
     setMarkerChoices(null)
   }, [selectedAccessoryId, selectedVehicleId, selectedMarker, markerVisibility, lightMode, truckKey])
   return <><div ref={host} className="three-host" aria-label="Interactive truck model. Drag to orbit and scroll to zoom."/>{markerChoices && <div className="marker-picker" role="dialog" aria-label="Choose attachment point" style={{ left: markerChoices.x, top: markerChoices.y }}><div className="marker-picker-heading"><span>Choose attachment point</span><button aria-label="Close attachment chooser" onClick={() => setMarkerChoices(null)}>×</button></div><div className="marker-picker-options">{markerChoices.points.map((point, index) => <button key={index} onClick={() => { setMarkerChoices(null); callbacks.current.onPick?.(point) }}>{markerLabel(point)}</button>)}</div></div>}{loading && !onLoading && <div className="scene-wait"><span className="loading-pulse"/>ASSEMBLING SAVE GEOMETRY</div>}</>

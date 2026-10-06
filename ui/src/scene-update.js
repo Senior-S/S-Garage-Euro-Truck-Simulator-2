@@ -1,9 +1,14 @@
 import * as THREE from 'three'
 import { configureGarageMaterial } from './garage-material.js'
+import { addHeadLights } from './garage-lights.js'
 
 export function disposeObject(object) {
   object.traverse(child => {
-    child.geometry?.dispose()
+    if (child.isLight) { child.dispose?.(); child.userData.ownedTexture?.dispose() }
+    if (child.geometry?.userData.garageRecord) {
+      const record = child.geometry.userData.garageRecord
+      if (--record.users === 0) { child.geometry.dispose(); record.cache.delete(record.key) }
+    } else child.geometry?.dispose()
     const materials = Array.isArray(child.material) ? child.material : child.material ? [child.material] : []
     materials.forEach(material => {
       if (material.userData.textureRecords) {
@@ -18,15 +23,22 @@ export function disposeObject(object) {
   object.removeFromParent()
 }
 
-function buildMaterial(source, textureCache, onFailure, lightMode) {
-  const color = source.color || [.48, .52, .49], transparent = source.transparent || (source.opacity ?? 1) < 1
-  const material = new THREE.MeshStandardMaterial({ color: new THREE.Color(...color), metalness: source.metalness ?? .54, roughness: source.roughness ?? .5, transparent, depthWrite: source.depthWrite ?? !transparent, alphaTest: source.alphaTest ?? 0, opacity: source.opacity ?? 1, side: THREE.DoubleSide })
+function buildMaterial(source, textureCache, onFailure, lightMode, onRender, paint) {
+  if (source.paintable && paint) {
+    const effect = (source.effect || '').split('.')
+    const tintOnly = effect.includes('paint') && !effect.includes('truckpaint')
+    source = { ...source, ...(tintOnly ? { color: paint.accessoryColor || paint.color } : paint) }
+  }
+  const effect = (source.effect || '').split('.'), unlit = effect.includes('unlit'), additive = unlit && effect.includes('add')
+  const color = source.color || [.48, .52, .49], transparent = additive || source.transparent || (source.opacity ?? 1) < 1
+  const parameters = { color: new THREE.Color(...color), transparent, depthWrite: additive ? false : source.depthWrite ?? !transparent, alphaTest: source.alphaTest ?? 0, opacity: source.opacity ?? 1, side: THREE.DoubleSide, blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending }
+  const material = unlit ? new THREE.MeshBasicMaterial(parameters) : new THREE.MeshStandardMaterial({ ...parameters, metalness: source.metalness ?? 0, roughness: source.roughness ?? .65 })
   const textures = new Map()
   material.userData.textureRecords = []
   for (const path of new Set([source.texture, source.paintTexture, source.lightMask, source.lightAlpha].filter(Boolean))) {
     let record = textureCache.get(path)
     if (!record) {
-      const texture = new THREE.TextureLoader().load(path, undefined, undefined, () => onFailure?.(`Unable to load truck texture: ${path}`))
+      const texture = new THREE.TextureLoader().load(path, onRender, undefined, () => { onFailure?.(`Unable to load truck texture: ${path}`); onRender?.() })
       texture.flipY = false; texture.wrapS = texture.wrapT = THREE.RepeatWrapping; texture.colorSpace = THREE.SRGBColorSpace
       record = { texture, users: 0 }; textureCache.set(path, record)
     }
@@ -37,9 +49,10 @@ function buildMaterial(source, textureCache, onFailure, lightMode) {
   return material
 }
 
-export function updateTruckGroup(group, pointsGroup, data, onFailure, lightMode) {
+export function updateTruckGroup(group, pointsGroup, data, onFailure, lightMode, onRender) {
   const instances = group.userData.instances ||= new Map(), counts = new Map(), retained = new Set()
   const textureCache = group.userData.textureCache ||= new Map()
+  const geometryCache = group.userData.geometryCache ||= new Map()
   for (const part of data.parts) {
     const prefix = JSON.stringify([part.vehicleId, part.id, part.category, part.definition]), index = counts.get(prefix) || 0
     counts.set(prefix, index + 1)
@@ -49,34 +62,27 @@ export function updateTruckGroup(group, pointsGroup, data, onFailure, lightMode)
     if (instance && instance.userData.modelKey !== part.modelKey) { disposeObject(instance); instances.delete(key); instance = null }
     if (!instance) {
       instance = new THREE.Group(); instance.userData.modelKey = part.modelKey; instance.userData.paintKey = JSON.stringify(part.paint)
-      for (const piece of part.model.pieces || []) {
-        const geometry = new THREE.BufferGeometry()
-        geometry.setAttribute('position', new THREE.Float32BufferAttribute(piece.positions || [], 3))
-        if (piece.normals?.length) geometry.setAttribute('normal', new THREE.Float32BufferAttribute(piece.normals, 3))
-        if (piece.uvs?.length) geometry.setAttribute('uv', new THREE.Float32BufferAttribute(piece.uvs, 2))
-        const shaderUvs = piece.material?.paintUv === 0 ? piece.uvs : piece.uvs1 || piece.uvs
-        if (shaderUvs?.length) geometry.setAttribute('garageUv', new THREE.Float32BufferAttribute(shaderUvs, 2))
-        if (piece.indices?.length) geometry.setIndex(piece.indices)
-        if (!piece.normals?.length) geometry.computeVertexNormals()
-        const source = { ...piece.material, ...(piece.material?.paintable ? part.paint : null) }
-        const material = buildMaterial(source, textureCache, onFailure, lightMode)
-        const mesh = new THREE.Mesh(geometry, material); mesh.userData.vehicleId = part.vehicleId; mesh.userData.section = part.section; mesh.userData.accessoryId = part.id; mesh.userData.category = part.category; instance.add(mesh)
-      }
-      for (const locator of part.model.locators || []) {
-        const hookup = locator.hookup || ''
-        if (!/flare\.vehicle\.(headl|high_beam|aux_lightb)/.test(hookup)) continue
-        const pixels = new Uint8Array(32 * 32 * 4)
-        for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) {
-          const index = (y * 32 + x) * 4, radius = Math.hypot((x - 15.5) / 15.5, (y - 15.5) / 15.5)
-          pixels.set([255, 246, 222, Math.round(Math.max(0, 1 - radius) ** 3 * 255)], index)
+      for (const [pieceIndex, piece] of (part.model.pieces || []).entries()) {
+        const geometryKey = JSON.stringify([part.modelKey, pieceIndex])
+        let record = part.modelKey && geometryCache.get(geometryKey)
+        if (!record) {
+          const geometry = new THREE.BufferGeometry()
+          geometry.setAttribute('position', new THREE.Float32BufferAttribute(piece.positions || [], 3))
+          if (piece.normals?.length) geometry.setAttribute('normal', new THREE.Float32BufferAttribute(piece.normals, 3))
+          if (piece.uvs?.length) geometry.setAttribute('uv', new THREE.Float32BufferAttribute(piece.uvs, 2))
+          const shaderUvs = piece.material?.paintUv === 0 ? piece.uvs : piece.uvs1 || piece.uvs
+          if (shaderUvs?.length) geometry.setAttribute('garageUv', new THREE.Float32BufferAttribute(shaderUvs, 2))
+          if (piece.indices?.length) geometry.setIndex(piece.indices)
+          if (!piece.normals?.length) geometry.computeVertexNormals()
+          record = { geometry, users: 0, key: geometryKey, cache: geometryCache }
+          if (part.modelKey) { geometryCache.set(geometryKey, record); geometry.userData.garageRecord = record }
         }
-        const texture = new THREE.DataTexture(pixels, 32, 32); texture.needsUpdate = true
-        const flare = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }))
-        flare.position.fromArray(locator.position || [0, 0, 0]); flare.scale.set(.32, .32, 1)
-        flare.userData.lightModeMinimum = /headl/.test(hookup) ? 1 : 2
-        flare.visible = (lightMode?.value || 0) >= flare.userData.lightModeMinimum
-        instance.add(flare)
+        record.users++
+        const source = { ...piece.material, lampAuxiliary: (part.model.locators || []).some(locator => /flare\.vehicle\.aux_light/.test(locator.hookup || '')) }
+        const material = buildMaterial(source, textureCache, onFailure, lightMode, onRender, part.paint)
+        const mesh = new THREE.Mesh(record.geometry, material); mesh.userData.vehicleId = part.vehicleId; mesh.userData.section = part.section; mesh.userData.accessoryId = part.id; mesh.userData.category = part.category; instance.add(mesh)
       }
+      if (part.model.headLights) addHeadLights(instance, part.model.headLights, lightMode, onRender, onFailure)
       instances.set(key, instance); group.add(instance)
     }
     const paintKey = JSON.stringify(part.paint)
@@ -84,7 +90,7 @@ export function updateTruckGroup(group, pointsGroup, data, onFailure, lightMode)
       part.model.pieces.forEach((piece, index) => {
         if (!piece.material?.paintable) return
         const mesh = instance.children[index], old = mesh.material
-        mesh.material = buildMaterial({ ...piece.material, ...part.paint }, textureCache, onFailure, lightMode)
+        mesh.material = buildMaterial(piece.material, textureCache, onFailure, lightMode, onRender, part.paint)
         // Acquire replacement textures before releasing the old references.
         for (const [cache, path] of old.userData.textureRecords) {
           const record = cache.get(path)
@@ -108,8 +114,17 @@ export function updateTruckGroup(group, pointsGroup, data, onFailure, lightMode)
     let holder = markers.get(key)
     if (!holder) {
       holder = new THREE.Group()
-      holder.add(new THREE.Mesh(new THREE.SphereGeometry(.057, 14, 10), new THREE.MeshBasicMaterial({ color: '#c7ddff', transparent: true, opacity: .96 })))
-      holder.add(new THREE.Mesh(new THREE.TorusGeometry(.095, .007, 5, 24), new THREE.MeshBasicMaterial({ color: '#c7ddff', transparent: true, opacity: .76 })))
+      for (const [shape, opacity] of [['sphere', .96], ['ring', .76]]) {
+        const geometryKey = `marker-${shape}`
+        let record = geometryCache.get(geometryKey)
+        if (!record) {
+          const geometry = shape === 'sphere' ? new THREE.SphereGeometry(.057, 14, 10) : new THREE.TorusGeometry(.095, .007, 5, 24)
+          record = { geometry, users: 0, key: geometryKey, cache: geometryCache }
+          geometryCache.set(geometryKey, record); geometry.userData.garageRecord = record
+        }
+        record.users++
+        holder.add(new THREE.Mesh(record.geometry, new THREE.MeshBasicMaterial({ color: '#c7ddff', transparent: true, opacity })))
+      }
       markers.set(key, holder); pointsGroup.add(holder)
     }
     holder.position.fromArray(point.position || [0, 0, 0]); holder.quaternion.fromArray(point.rotation || [0, 0, 0, 1]); holder.scale.fromArray(point.scale || [1, 1, 1])

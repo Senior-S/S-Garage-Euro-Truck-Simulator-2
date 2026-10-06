@@ -7,6 +7,54 @@ const model = { pieces: [{ positions: [0, 0, 0, 1, 0, 0, 0, 1, 0], indices: [0, 
 const part = (id, modelKey, position = [0, 0, 0]) => ({ id, category: 'accessory', modelKey, position, model })
 const point = position => ({ accessoryId: 'cab', kind: 'hookup', name: 'slot_0', position })
 
+test('TruckersMP underbody glow uses unlit additive blending without an opaque depth plane', () => {
+  const group = new THREE.Group(), markers = new THREE.Group()
+  const glow = { ...part('glow', 'glow'), model: { pieces: [{ ...model.pieces[0], material: { effect: 'eut2.unlit.tex.add', depthWrite: true } }] } }
+  updateTruckGroup(group, markers, { parts: [glow], points: [] })
+  const material = group.children[0].children[0].material
+  assert.equal(material.isMeshBasicMaterial, true)
+  assert.equal(material.blending, THREE.AdditiveBlending)
+  assert.equal(material.transparent, true)
+  assert.equal(material.depthWrite, false)
+  disposeObject(group); disposeObject(markers)
+})
+
+test('tire decals use their accessory tint without importing the truck paint atlas or finish', () => {
+  const original = THREE.TextureLoader.prototype.load, loaded = []
+  THREE.TextureLoader.prototype.load = path => { loaded.push(path); return new THREE.Texture() }
+  const group = new THREE.Group(), markers = new THREE.Group()
+  const tire = { ...part('tire', 'tire'), model: { pieces: [{ ...model.pieces[0], material: { effect: 'eut2.dif.spec.paint.decal.over', paintable: true, texture: '/lettering', roughness: .64, metalness: 0, transparent: true } }] },
+    paint: { color: [.1, .2, .3], accessoryColor: [.8, .1, .2], paintTexture: '/body-atlas', metalness: .18, roughness: .42, flipColor: [1, 1, 1] } }
+  try {
+    updateTruckGroup(group, markers, { parts: [tire], points: [] })
+    const mesh = group.children[0].children[0], geometry = mesh.geometry
+    assert.deepEqual(loaded, ['/lettering'])
+    assert.deepEqual(mesh.material.color.toArray(), [.8, .1, .2])
+    assert.equal(mesh.material.roughness, .64); assert.equal(mesh.material.metalness, 0)
+    tire.paint = { ...tire.paint, accessoryColor: [.1, .8, .2] }
+    updateTruckGroup(group, markers, { parts: [tire], points: [] })
+    assert.equal(mesh.geometry, geometry)
+    assert.deepEqual(mesh.material.color.toArray(), [.1, .8, .2])
+    assert.deepEqual(loaded, ['/lettering'])
+  } finally { disposeObject(group); disposeObject(markers); THREE.TextureLoader.prototype.load = original }
+})
+
+test('texture completion requests a frame for the idle garage', () => {
+  const original = THREE.TextureLoader.prototype.load, callbacks = []
+  THREE.TextureLoader.prototype.load = function (path, onLoad) { callbacks.push(onLoad); return new THREE.Texture() }
+  const group = new THREE.Group(), markers = new THREE.Group()
+  let renders = 0
+  try {
+    const textured = { ...part('cab', 'cab'), model: { pieces: [{ ...model.pieces[0], material: { texture: '/base' } }] } }
+    updateTruckGroup(group, markers, { parts: [textured], points: [] }, null, { value: 0 }, () => renders++)
+    callbacks[0]()
+    assert.equal(renders, 1)
+    const material = [...group.userData.instances.values()][0].children[0].material
+    assert.equal(material.metalness, 0)
+    assert.equal(material.roughness, .65)
+  } finally { disposeObject(group); THREE.TextureLoader.prototype.load = original }
+})
+
 test('paint changes replace materials while retaining truck geometry and markers', () => {
   const group = new THREE.Group(), markers = new THREE.Group()
   const painted = { ...part('cab', 'cab'), model: { pieces: [{ ...model.pieces[0], material: { paintable: true } }] }, paint: { color: [1, 0, 0] } }
@@ -68,14 +116,24 @@ test('duplicate and wheel instances keep separate transforms and remain selectab
   const group = new THREE.Group(), markers = new THREE.Group(); group.add(markers)
   updateTruckGroup(group, markers, { parts: [part('wheel', 'tire', [-1, 0, 0]), part('wheel', 'tire', [1, 0, 0])], points: [point([-1, 0, 0]), point([1, 0, 0])] })
   const instances = [...group.userData.instances.values()]
+  assert.equal(instances[0].children[0].geometry, instances[1].children[0].geometry)
+  assert.notEqual(instances[0].children[0].material, instances[1].children[0].material)
   assert.equal(instances.length, 2)
   assert.deepEqual(instances.map(instance => instance.position.x), [-1, 1])
   assert.ok(instances.every(instance => instance.children[0].userData.accessoryId === 'wheel'))
   assert.equal(markers.children.length, 2)
+  assert.equal(markers.children[0].children[0].geometry, markers.children[1].children[0].geometry)
   updateTruckGroup(group, markers, { parts: [part('wheel', 'tire', [-2, 0, 0]), part('wheel', 'tire', [2, 0, 0])], points: [] })
   assert.deepEqual([...group.userData.instances.values()], instances)
   assert.deepEqual(instances.map(instance => instance.position.x), [-2, 2])
+  const geometry = instances[0].children[0].geometry
+  let released = 0
+  geometry.addEventListener('dispose', () => released++)
+  updateTruckGroup(group, markers, { parts: [part('wheel', 'tire', [-2, 0, 0])], points: [] })
+  assert.equal(released, 0)
   disposeObject(group)
+  assert.equal(released, 1)
+  assert.equal(group.userData.geometryCache.size, 0)
 })
 
 test('removing one hookup preserves different hookups on the same owner', () => {

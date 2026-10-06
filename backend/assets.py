@@ -16,6 +16,7 @@ import sys
 import tempfile
 import threading
 import time
+import zlib
 from concurrent.futures import CancelledError
 from pathlib import Path
 from typing import Any
@@ -182,7 +183,7 @@ class AssetStore:
         self._cache_migration_required = None
 
     def set_mod_sources(self, sources: list[str | Path]) -> None:
-        """Set the active profile's explicitly selected mod archives/directories, in load order."""
+        """Mount discovered local assets and saved mods in load order."""
         requested = [Path(source).expanduser() for source in sources]
         missing = [str(source) for source in requested if not source.exists()]
         if missing:
@@ -323,6 +324,61 @@ class AssetStore:
         self._converter_features = revision, features
         return features
 
+    def _truckersmp_archive(self, source: Path, cancelled=None) -> Path:
+        """Normalize readable TruckersMP HashFS v1 flags in a cached copy."""
+        if source.suffix.casefold() != ".mp":
+            return source
+        metadata = source.stat()
+        signature = hashlib.sha256(f"tmp-flags-v1:{source.resolve()}:{metadata.st_size}:{metadata.st_mtime_ns}".encode()).hexdigest()
+        target = self.cache_path / "truckersmp" / f"{signature}.mp"
+        if target.is_file():
+            return target
+        with source.open("rb") as archive:
+            header = archive.read(32)
+            if len(header) != 32 or header[:6] != b"SCS#\x01\x00":
+                return source
+            count, offset = struct.unpack_from("<II", header, 12)
+            if offset < 32 or offset + count * 32 > metadata.st_size:
+                raise RuntimeError(f"Invalid TruckersMP archive table: {source.name}")
+            archive.seek(offset)
+            table = bytearray(archive.read(count * 32))
+            changed = False
+            for index in range(count):
+                if cancelled and cancelled():
+                    raise CancelledError()
+                _, location, flags, _, size, packed_size = struct.unpack_from("<QQIIII", table, index * 32)
+                if not flags & 8:
+                    continue
+                if location + packed_size > metadata.st_size or size > 256 * 1024 * 1024:
+                    raise RuntimeError(f"Invalid TruckersMP archive entry: {source.name}")
+                if flags & 2:
+                    archive.seek(location)
+                    try:
+                        decoder = zlib.decompressobj()
+                        payload = decoder.decompress(archive.read(packed_size), size + 1)
+                    except zlib.error as error:
+                        raise RuntimeError(f"TruckersMP archive contains an unreadable encrypted entry: {source.name}") from error
+                    if len(payload) != size or not decoder.eof or decoder.unused_data:
+                        raise RuntimeError(f"Invalid TruckersMP entry size: {source.name}")
+                struct.pack_into("<I", table, index * 32 + 16, flags & ~8)
+                changed = True
+        if not changed:
+            return source
+        if self.progress:
+            self.progress("Preparing TruckersMP assets", source.name)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary = tempfile.mkstemp(dir=target.parent, suffix=".tmp")
+        os.close(descriptor)
+        try:
+            shutil.copyfile(source, temporary)
+            with open(temporary, "r+b") as copy:
+                copy.seek(offset)
+                copy.write(table)
+            os.replace(temporary, target)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+        return target
+
     def _run(self, arguments: list[str], timeout: int = 300, cancelled=None, *, partial_batch=False) -> str:
         archives = self._archives()
         if not self.game_path or not self.game_path.is_dir() or not archives or not self.tool_path.is_file():
@@ -340,7 +396,8 @@ class AssetStore:
                 arguments.append("--viewer-geometry")
             if features.get("garagePreview"):
                 arguments.append("--garage-preview")
-        command = [str(self.tool_path), *(part for archive in archives for part in ("-b", str(archive))), *arguments]
+        mounted = [self._truckersmp_archive(archive, cancelled) for archive in archives]
+        command = [str(self.tool_path), *(part for archive in mounted for part in ("-b", str(archive))), *arguments]
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         deadline = time.monotonic() + timeout
@@ -566,14 +623,40 @@ class AssetStore:
                 self._definition_catalog = catalog
             return self._definitions.get(path_or_unit.casefold())
 
-    def paint_job(self, path: str, cancelled=None, textures=True, *, include_overrides=True, accessory_key=None, _entry=None, _fingerprint=None) -> dict:
+    def head_lights(self, path: str, cancelled=None, *, auxiliary=False) -> dict:
+        """Export the installed headlight definition and its projection masks."""
+        fields = (self.definition(path) or {}).get("fields", {})
+        export = self.cache_path / "lights" / self._fingerprint()
+        masks, diagnostics = {}, []
+        for mode in ("low_beam", "hi_beam", *(("front_beam", "roof_beam") if auxiliary else ())):
+            resource = _unquote(fields.get(mode + "_mask", ""))
+            if not resource:
+                continue
+            base = resource.removesuffix(".tobj")
+            target = export / (base.lstrip("/") + ".dds")
+            try:
+                if not target.is_file() and not target.with_suffix(".png").is_file():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    self._run(["-e", str(export), "-t", resource], cancelled=cancelled)
+                url = _texture_url({"texture_base": base}, export, ignore_alpha=True)
+                if not url:
+                    raise FileNotFoundError(resource)
+                relative = url.removeprefix("/cache/")
+                self.texture_files[relative] = (self.cache_path / relative).resolve()
+                masks[mode] = url
+            except (RuntimeError, FileNotFoundError) as error:
+                diagnostics.append(f"{mode}: projection mask unavailable; using an approximate beam. {error}")
+        return {"fields": fields, "masks": masks, "diagnostics": diagnostics}
+
+    def paint_job(self, path: str, cancelled=None, textures=True, *, include_overrides=True, accessory_key=None, accessory_keys=None, _entry=None, _fingerprint=None) -> dict:
         """Import paint masks once, including the game's accessory overrides."""
         with _IMPORT_LOCK:
             if cancelled and cancelled():
                 raise CancelledError()
             cache = self.__dict__.setdefault("_paint_jobs", {})
             fingerprint = _fingerprint or self._fingerprint()
-            key = (fingerprint, path, textures, include_overrides, accessory_key)
+            selected_keys = frozenset(accessory_keys) if accessory_keys is not None else None
+            key = (fingerprint, path, textures, include_overrides, accessory_key, selected_keys)
             if key in cache:
                 return cache[key]
             entry = _entry or self.definition(path)
@@ -602,7 +685,7 @@ class AssetStore:
                         values = _properties(body)
                         for accessory in values.get("acc_list[]", []):
                             accessory = _unquote(accessory)
-                            if accessory_key is None or accessory == accessory_key:
+                            if (accessory_key is None or accessory == accessory_key) and (selected_keys is None or accessory in selected_keys):
                                 overrides[accessory] = values
             export = self.cache_path / "models" / hashlib.sha256(str(key[:3]).encode()).hexdigest()[:20]
             def mask(values):
@@ -621,7 +704,17 @@ class AssetStore:
                 self.texture_files[relative] = (self.cache_path / relative).resolve()
                 return url
             result = {"fields": {name: values[-1] for name, values in settings.items()}, "texture": mask(settings),
-                      "overrides": {name: mask(values) for name, values in overrides.items()}}
+                      "overrides": {}, "diagnostics": []}
+            failed_masks = {}
+            for name, values in overrides.items():
+                resource = _unquote(values.get("paint_job_mask", [""])[-1])
+                try:
+                    if resource in failed_masks:
+                        raise FileNotFoundError(failed_masks[resource])
+                    result["overrides"][name] = mask(values)
+                except (FileNotFoundError, RuntimeError) as error:
+                    failed_masks[resource] = str(error)
+                    result["diagnostics"].append(f"Paint override for {name} unavailable: {resource}. Using the main paint texture.")
             cache[key] = result
             return result
 
@@ -632,7 +725,7 @@ class AssetStore:
             (entry.get("exteriorModel"), entry.get("exteriorLook"), entry.get("exteriorVariant")),
             (entry.get("extModel"), entry.get("extLook"), entry.get("extVariant")),
             (entry.get("baseModel") or fields.get("model") or fields.get("model[]") or fields.get("detail_model"), entry.get("look"), entry.get("variant")),
-            (entry.get("interiorModel"), entry.get("interiorLook"), entry.get("interiorVariant")),
+            (entry.get("interiorModel"), entry.get("interiorLook") or entry.get("look"), entry.get("interiorVariant") or entry.get("variant")),
         )
         selected = next(((path, model_look, model_variant) for path, model_look, model_variant in model_options if path), None)
         if selected is None:
@@ -763,6 +856,16 @@ class AssetStore:
                         incomplete_path.write_text("Glass texture export did not finish.\n", encoding="utf-8")
                         self._run(["-e", str(export), "-t", base + ".tobj"], timeout=120, cancelled=cancelled)
             model = _parse_model(geometry_path, pit_path if pit_path.is_file() else None, export, look, variant)
+            if entry.get("category") == "interior" and fields.get("animated_model"):
+                animated_path = entry["path"] + "#animated"
+                try:
+                    animated = self.model(animated_path, cancelled=cancelled, _entry={
+                        "path": animated_path, "fields": {"model": fields["animated_model"]}})
+                    model["steeringBones"] = animated.get("bones", [])
+                    if not model["steeringBones"]:
+                        model["diagnostics"].append("Steering skeleton unavailable; using the cab steering mount.")
+                except (ValueError, FileNotFoundError, RuntimeError) as error:
+                    model["diagnostics"].append(f"Steering skeleton unavailable; using the cab steering mount: {error}")
             if fields.get("data[]"):
                 catalog_root = self.cache_path / "catalog" / fingerprint
                 definition = catalog_root / entry["sourcePath"].lstrip("/")
@@ -1017,8 +1120,8 @@ def _parse_model(pim_path: Path, pit_path: Path | None, export: Path, selected_l
                 "alphaTest": 0.01 if transparent else 0,
                 "depthWrite": not transparent,
                 "opacity": 0.55 if "glass" in effect_tokens else 1,
-                "metalness": 0.15 if "spec" in alias.casefold() or "chrome" in alias.casefold() else 0,
-                "roughness": max(.18, min(.9, (2 / (material_data["attributes"].get("shininess", [16])[0] + 2)) ** .25)),
+                "metalness": .85 if "chrome" in alias.casefold() else 0,
+                "roughness": max(.18 if "chrome" in alias.casefold() or "glass" in effect_tokens else .42, min(.9, (2 / (material_data["attributes"].get("shininess", [16])[0] + 2)) ** .25)),
             },
         })
     locators = []
@@ -1048,7 +1151,7 @@ def _parse_model(pim_path: Path, pit_path: Path | None, export: Path, selected_l
         })
     if not any(piece["positions"] for piece in pieces) and not locators:
         raise ValueError(f"{pim_path} contains neither visible geometry nor locators.")
-    return {"pieces": pieces, "locators": locators, "look": look_name, "variant": variant_name, "diagnostics": [] if pit_path else ["PIT material traits are missing; geometry uses neutral material values."]}
+    return {"pieces": pieces, "locators": locators, "bones": native["bones"] if native else [], "look": look_name, "variant": variant_name, "diagnostics": [] if pit_path else ["PIT material traits are missing; geometry uses neutral material values."]}
 
 
 def _texture_url(textures: dict[str, str], export: Path, ignore_alpha: bool = False, alpha_only: bool = False) -> str | None:

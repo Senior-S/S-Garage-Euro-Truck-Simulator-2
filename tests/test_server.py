@@ -33,6 +33,14 @@ class MinimalAssets:
 
 
 class ServerTests(unittest.TestCase):
+    def test_update_checks_are_shared_and_do_not_repeat_on_refresh(self):
+        result = {"status": "unavailable", "currentVersion": "0.3.3", "url": "https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/releases"}
+        with patch.object(server, "check_updates", return_value=result) as check:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                responses = list(pool.map(self.request, ["/api/updates", "/api/updates"]))
+            self.assertEqual(responses, [(200, result), (200, result)])
+            self.assertEqual(check.call_count, 1)
+
     def test_clearing_converter_path_detects_bundle_immediately_and_after_restart(self):
         garage = self.http.garage
         root = Path(self.temporary.name)

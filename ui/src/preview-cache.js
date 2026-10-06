@@ -4,13 +4,13 @@ let activeJobs = 0
 let thumbnails
 
 export async function cachedThumbnail(key) {
-  thumbnails ||= caches.open('yard-catalog-thumbnails-v1')
+  thumbnails ||= caches.open('yard-catalog-thumbnails-v2')
   const cached = await (await thumbnails).match(key)
   return cached ? cached.text() : null
 }
 
 export async function storeThumbnail(key, preview) {
-  thumbnails ||= caches.open('yard-catalog-thumbnails-v1')
+  thumbnails ||= caches.open('yard-catalog-thumbnails-v2')
   const cache = await thumbnails
   await cache.put(key, new Response(preview))
   const keys = await cache.keys()
@@ -57,6 +57,6 @@ export function clearModelCache(includeThumbnails = false) {
   modelCache.clear()
   if (includeThumbnails) {
     thumbnails = undefined
-    return caches.delete('yard-catalog-thumbnails-v1')
+    return caches.delete('yard-catalog-thumbnails-v2')
   }
 }

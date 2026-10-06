@@ -1,6 +1,7 @@
 from pathlib import Path
 from copy import deepcopy
 import sys
+import math
 import unittest
 from concurrent.futures import CancelledError
 from unittest.mock import patch
@@ -42,6 +43,56 @@ class FakeAssets:
 
 
 class SceneTests(unittest.TestCase):
+    def test_model_less_headlights_get_a_stable_rig_without_importing_geometry(self):
+        assets = FakeAssets()
+        assets.entries.append({"path": "/lights", "unitId": "lights", "category": "head_light", "model": None})
+        assets.head_lights = lambda path, **kwargs: {"fields": {"reflectors_offset": "(0,.8,-3)"}, "masks": {"low_beam": "/mask"}}
+        truck = {"id": "truck", "accessories": [
+            {"id": category, "dataPath": path, "category": category, "type": "vehicle_accessory", "fields": {}, "slots": []}
+            for path, category in (("/chassis", "chassis"), ("/lights", "head_light"))]}
+        cache = {}
+        result = build_scene(truck, assets, model_cache=cache)
+        rig = next(part for part in result["parts"] if part["category"] == "head_light")
+        self.assertEqual(rig["model"]["headLights"]["masks"]["low_beam"], "/mask")
+        self.assertEqual(rig["model"]["headLights"]["auxiliary"], [])
+        self.assertEqual(rig["model"]["pieces"], [])
+        self.assertEqual(rig["vehicleId"], "truck")
+        self.assertNotIn("/lights", assets.calls)
+        # A second assembly uses the existing chassis model and preserves rig identity.
+        again = build_scene(truck, assets, model_cache=cache)
+        self.assertEqual(rig["modelKey"], next(part for part in again["parts"] if part["category"] == "head_light")["modelKey"])
+
+    def test_steering_uses_interior_bone_chain_before_cab_mount(self):
+        assets = FakeAssets()
+        assets.entries.append({"path": "/interior", "unitId": "interior", "category": "interior", "model": "interior"})
+        original = assets.model
+        def model(path):
+            result = original(path)
+            if path == "/chassis":
+                result["locators"].append({"name": "ext_interior", **IDENTITY, "position": [0, 3, 0]})
+            if path == "/interior":
+                result["steeringBones"] = [
+                    {"name": "root", "parent": 255, "translation": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+                    {"name": "column", "parent": 0, "translation": [0, -.2, -.5], "rotation": [math.sin(.3), 0, 0, math.cos(.3)], "scale": [1, 1, 1]},
+                    {"name": "steering_w", "parent": 1, "translation": [0, .1, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]},
+                ]
+            return result
+        assets.model = model
+        truck = {"id": "truck", "accessories": [
+            {"id": category, "dataPath": path, "category": category, "type": "vehicle_accessory", "fields": {}, "slots": []}
+            for path, category in (("/chassis", "chassis"), ("/steering", "steering_w"), ("/interior", "interior"))]}
+        scene = build_scene(truck, assets)
+        wheel = next(p for p in scene["parts"] if p["category"] == "steering_w")
+        expected = compose({**IDENTITY, "position": [0, 2.8, -.5], "rotation": [math.sin(.3), 0, 0, math.cos(.3)]}, {**IDENTITY, "position": [0, .1, 0]})
+        expected = compose(expected, {**IDENTITY, "rotation": [0, -math.sqrt(.5), 0, math.sqrt(.5)]})
+        for actual, target in zip(wheel["position"], expected["position"]):
+            self.assertAlmostEqual(actual, target)
+        self.assertEqual(wheel["rotation"], expected["rotation"])
+        markers = [p for p in scene["points"] if p.get("category") == "steering_w"]
+        self.assertEqual(len(markers), 1)
+        self.assertEqual(markers[0]["position"], wheel["position"])
+        self.assertFalse(scene["issues"])
+
     def test_linked_trailer_sections_keep_mounts_paint_and_models_independent(self):
         assets = FakeAssets()
         assets.entries = [{"path": path, "unitId": path, "category": category, "model": path}
@@ -140,6 +191,7 @@ class SceneTests(unittest.TestCase):
         self.assertEqual(materials["cabin"]["paintTexture"], "/atlas")
         self.assertEqual(materials["sunshld"]["paintTexture"], "/white")
         self.assertEqual(materials["sunshld"]["color"], [1, 1, 1])
+        self.assertEqual(materials["sunshld"]["accessoryColor"], [0, 0, 0])
         self.assertEqual(materials["cabin"]["paintColors"][2], [0, .5, 1])
         truck["accessories"][-1]["fields"]["base_color"] = "(0,1,0)"
         repainted = build_scene(truck, assets, model_cache=cache)

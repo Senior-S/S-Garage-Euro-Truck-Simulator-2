@@ -2,6 +2,7 @@ import hashlib
 import json
 import struct
 import tempfile
+import zlib
 import unittest
 from concurrent.futures import CancelledError
 from concurrent.futures import ThreadPoolExecutor
@@ -13,6 +14,72 @@ from backend.assets import AssetStore, Image, _blocks, _parse_model, _records, _
 
 
 class AssetParserTests(unittest.TestCase):
+    def test_truckersmp_compatibility_copy_preserves_source_and_payload_and_is_cached(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "scout.mp"
+            payload = b"SiiNunit { truck_data : vehicle.scout {} }"
+            compressed = zlib.compress(payload)
+            original = struct.pack("<4sHH4sII12x", b"SCS#", 1, 0, b"CITY", 1, 32) + struct.pack("<QQIIII", 123, 64, 14, 0, len(payload), len(compressed)) + compressed
+            source.write_bytes(original)
+            store = AssetStore(cache_path=root / "cache")
+            target = store._truckersmp_archive(source)
+            self.assertNotEqual(target, source)
+            self.assertEqual(source.read_bytes(), original)
+            copied = target.read_bytes()
+            self.assertEqual(struct.unpack_from("<I", copied, 48)[0], 6)
+            self.assertEqual(copied[64:], compressed)
+            timestamp = target.stat().st_mtime_ns
+            self.assertEqual(store._truckersmp_archive(source), target)
+            self.assertEqual(target.stat().st_mtime_ns, timestamp)
+
+    def test_truckersmp_unreadable_payload_is_not_normalized(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "protected.mp"
+            source.write_bytes(struct.pack("<4sHH4sII12x", b"SCS#", 1, 0, b"CITY", 1, 32) + struct.pack("<QQIIII", 123, 64, 14, 0, 10, 10) + b"encrypted!")
+            store = AssetStore(cache_path=root / "cache")
+            with self.assertRaisesRegex(RuntimeError, "unreadable encrypted entry"):
+                store._truckersmp_archive(source)
+            self.assertFalse((root / "cache/truckersmp").exists())
+
+    def test_missing_headlight_projection_is_diagnostic_and_does_not_block_other_beams(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = AssetStore(cache_path=Path(directory))
+            fields = {"low_beam_mask": '"/missing.tobj"'}
+            with patch.object(store, "definition", return_value={"fields": fields}), patch.object(store, "_fingerprint", return_value="test"), patch.object(store, "_run", return_value="Unable to open file"):
+                result = store.head_lights("/lights")
+                self.assertEqual(result["masks"], {})
+                self.assertIn("approximate beam", result["diagnostics"][0])
+
+    def test_headlight_masks_use_game_definitions_and_reuse_cached_exports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = AssetStore(cache_path=Path(directory))
+            fields = {mode + "_mask": '"/material/' + mode + '.tobj"' for mode in ("low_beam", "hi_beam", "front_beam", "roof_beam")}
+            exported = []
+            def run(arguments, **kwargs):
+                exported.append(arguments[-1])
+                target = Path(arguments[1]) / arguments[-1].lstrip("/").replace(".tobj", ".png")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                Image.new("RGBA", (2, 2), (128, 64, 32, 0)).save(target)
+            with patch.object(store, "definition", return_value={"fields": fields}), patch.object(store, "_fingerprint", return_value="test"), patch.object(store, "_run", side_effect=run):
+                lights = store.head_lights("/lights", auxiliary=True)
+                self.assertEqual(set(lights["masks"]), {"low_beam", "hi_beam", "front_beam", "roof_beam"})
+                self.assertEqual(len(store.texture_files), 4)
+                store.head_lights("/lights", auxiliary=True)
+                self.assertEqual(len(exported), 4)
+                self.assertIs(lights["fields"], fields)
+                with Image.open(store.texture_files[lights["masks"]["low_beam"].removeprefix("/cache/")]) as image:
+                    self.assertEqual(image.getpixel((0, 0)), (128, 64, 32))
+
+    def test_interior_only_accessory_keeps_generic_look_and_variant(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = AssetStore(cache_path=Path(directory))
+            entry = {"path": "/wheel", "interiorModel": "/wheel.pmd", "look": "v8", "variant": "exclusive_v8"}
+            self.assertEqual(store._model_paths(entry, fingerprint="test")[:3], ("/wheel", "v8", "exclusive_v8"))
+            entry.update(interiorLook="wood", interiorVariant="wooden")
+            self.assertEqual(store._model_paths(entry, fingerprint="test")[:3], ("/wheel", "wood", "wooden"))
+
     def setUp(self):
         # Legacy fixtures must not depend on the converter installed on the host.
         capabilities = patch.object(AssetStore, "_converter_capabilities", return_value={})
@@ -148,6 +215,40 @@ Path: "folder\\"
                 complete = store.paint_job(path)
                 self.assertEqual(set(complete["overrides"]), {"body.curtain_136", "body.curtain_78", "body.dry_van_136"})
                 self.assertEqual(run.call_count, 3)
+
+    def test_missing_optional_paint_masks_do_not_block_available_paint(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = AssetStore(cache_path=Path(temp))
+            path = "/def/vehicle/truck/test/paint_job/test.sii"
+            store._catalog = [{"path": path, "sourcePath": path, "unitId": "test.paint_job"}]
+            definition = store.cache_path / "catalog" / store._fingerprint() / path.lstrip("/")
+            definition.parent.mkdir(parents=True)
+            definition.write_text('accessory_paint_job_data : test.paint_job {\npaint_job_mask: "/main.tobj"\n}')
+            overrides = definition.parent / "accessory" / definition.name
+            overrides.parent.mkdir()
+            overrides.write_text('simple_paint_job_data : .a {\npaint_job_mask: "/valid.tobj"\nacc_list[]: "sunshld.painted"\n}\nsimple_paint_job_data : .b {\npaint_job_mask: "/missing.tobj"\nacc_list[]: "r_fender.8x4_p"\nacc_list[]: "r_fender.8x4_blk_p"\n}')
+            def export(arguments, **kwargs):
+                if arguments[3] == "/missing.tobj":
+                    raise RuntimeError("Unable to mstat file!")
+                target = Path(arguments[1]) / arguments[3].lstrip("/").replace(".tobj", ".png")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                Image.new("RGBA", (1, 1), (255, 0, 0, 255)).save(target)
+            with patch.object(store, "_run", side_effect=export) as run:
+                fitted = store.paint_job(path, accessory_keys={"sunshld.painted"})
+                self.assertEqual(set(fitted["overrides"]), {"sunshld.painted"})
+                self.assertEqual(fitted["diagnostics"], [])
+                self.assertEqual([call.args[0][3] for call in run.call_args_list], ["/main.tobj", "/valid.tobj"])
+                complete = store.paint_job(path)
+                self.assertEqual(complete["texture"], fitted["texture"])
+                self.assertEqual(set(complete["overrides"]), {"sunshld.painted"})
+                self.assertEqual(len(complete["diagnostics"]), 2)
+                self.assertEqual(run.call_count, 3)
+                with self.assertRaises(CancelledError):
+                    store.paint_job(path, cancelled=lambda: True)
+            with patch.object(store, "_run", side_effect=RuntimeError("main mask failure")):
+                definition.write_text('accessory_paint_job_data : test.paint_job {\npaint_job_mask: "/required.tobj"\n}')
+                with self.assertRaisesRegex(RuntimeError, "main mask failure"):
+                    store.paint_job(path, include_overrides=False)
 
     def test_packed_light_mask_preserves_rgb_when_alpha_is_zero(self):
         with tempfile.TemporaryDirectory() as temp:

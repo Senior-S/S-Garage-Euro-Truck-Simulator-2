@@ -21,7 +21,7 @@ test('thumbnail storage works on its first use and retains the newest 512 previe
     let deleted
     globalThis.caches.delete = async name => { deleted = name; entries.clear(); return true }
     await clearModelCache(true)
-    assert.equal(deleted, 'yard-catalog-thumbnails-v1')
+    assert.equal(deleted, 'yard-catalog-thumbnails-v2')
     assert.equal(cachedModel('old'), undefined)
     assert.equal(await cachedThumbnail('new'), null)
   } finally { delete globalThis.caches }

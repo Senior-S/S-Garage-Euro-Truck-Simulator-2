@@ -20,7 +20,7 @@ def paint_material(color: list, fields: dict, paint_texture: str | None = None) 
         paint.update({"paintTexture": paint_texture, "paintColors": [fields.get(name, fallback) for name, fallback in (("mask_r_color", "(1,0,0)"), ("mask_g_color", "(0,1,0)"), ("mask_b_color", "(0,0,1)"))], "airbrush": fields.get("airbrush") == "true", "paintUv": 1})
         paint["paintColors"] = [_numbers(value)[:3] for value in paint["paintColors"]]
     if fields.get("flipflake") == "true":
-        paint.update({"metalness": .75, "roughness": .25, "flipColor": _numbers(fields.get("flip_color", "(0,0,0)"))[:3], "flakeColor": _numbers(fields.get("flake_color", "(1,1,1)"))[:3], "flipStrength": float(fields.get("flip_strength", "1"))})
+        paint.update({"metalness": .18, "roughness": .42, "flipColor": _numbers(fields.get("flip_color", "(0,0,0)"))[:3], "flakeColor": _numbers(fields.get("flake_color", "(1,1,1)"))[:3], "flipStrength": float(fields.get("flip_strength", "1"))})
     return paint
 
 
@@ -119,7 +119,9 @@ def build_scene(truck: dict, assets, cancelled=None, model_cache=None, *, prune_
     paint_color = active_paint["fields"].get("base_color") if active_paint else None
     if progress:
         progress("Preparing paint", "Reusing cached masks or importing the selected paint job.")
-    paint_job = assets.paint_job(active_paint["dataPath"], cancelled=cancelled) if active_paint and hasattr(assets, "paint_job") else {}
+    paint_keys = {f'{accessory["category"]}.{by_path.get(accessory["dataPath"], {}).get("unitId", "").split(".")[0]}' for accessory in accessories}
+    paint_job = assets.paint_job(active_paint["dataPath"], cancelled=cancelled, accessory_keys=paint_keys) if active_paint and hasattr(assets, "paint_job") else {}
+    issues.extend(paint_job.get("diagnostics", []))
     paint_fields = {**paint_job.get("fields", {}), **(active_paint["fields"] if active_paint else {})}
     if hasattr(assets, "prepare_models"):
         requests = set()
@@ -167,12 +169,30 @@ def build_scene(truck: dict, assets, cancelled=None, model_cache=None, *, prune_
         # Material metadata identifies paint shaders. Geometry is reused unchanged.
         if color and any(piece["material"].get("paintable") for piece in model["pieces"]):
             paint = paint_material(color, paint_fields, paint_texture)
+            accessory_color = accessory["fields"].get("paint_color")
+            if accessory_color:
+                paint["accessoryColor"] = _numbers(accessory_color)[:3]
         parts.append({"id": accessory["id"], "definition": accessory["dataPath"], "category": accessory["category"],
                       "model": model, "paint": paint, "hookup": hookup, **transform})
         for diagnostic in model.get("diagnostics", []):
             message = f'{accessory["category"]}: {diagnostic}'
             if message not in issues:
                 issues.append(message)
+        if accessory["category"] == "interior":
+            bones = model.get("steeringBones", [])
+            steering = next((bone for bone in bones if bone["name"] == "steering_w"), None)
+            if steering:
+                chain = []
+                while steering:
+                    chain.append(steering)
+                    steering = bones[steering["parent"]] if steering["parent"] != 255 else None
+                world = transform
+                for bone in reversed(chain):
+                    world = compose(world, {"position": bone["translation"], "rotation": bone["rotation"], "scale": bone["scale"]})
+                # Accessory meshes use X across the wheel; the steering bone
+                # uses Z. Align the spokes without changing the tilt.
+                world = compose(world, {**IDENTITY, "rotation": [0, -math.sqrt(.5), 0, math.sqrt(.5)]})
+                mounts.append({"name": "swheel", "owner": accessory["id"], "ownerCategory": "interior", **world})
         for locator in model.get("locators", []):
             check_cancelled()
             name = locator["name"]
@@ -228,7 +248,8 @@ def build_scene(truck: dict, assets, cancelled=None, model_cache=None, *, prune_
     while pending:
         check_cancelled()
         remaining = []
-        for accessory, model in pending:
+        # Interior skeleton mounts must exist before fitting the steering wheel.
+        for accessory, model in sorted(pending, key=lambda item: item[0]["category"] != "interior"):
             check_cancelled()
             category = accessory["category"]
             if accessory["type"] == "vehicle_wheel_accessory":
@@ -251,6 +272,8 @@ def build_scene(truck: dict, assets, cancelled=None, model_cache=None, *, prune_
                         targets = [m for m in mounts if m["name"].startswith(category + "_")]
                 # Donor mounts on the cab/frame win over mounts introduced by other accessories.
                 primary = [m for m in targets if m["ownerCategory"] in ("cabin", "chassis")]
+                if category == "steering_w":
+                    primary = [m for m in targets if m["ownerCategory"] == "interior"] or primary
                 targets = primary or targets
                 for target in list(targets):
                     place(accessory, model, {key: target[key] for key in IDENTITY})
@@ -265,6 +288,8 @@ def build_scene(truck: dict, assets, cancelled=None, model_cache=None, *, prune_
     for mount in mounts:
         name = mount["name"]
         mount_category = MOUNT_CATEGORIES.get(name, name)
+        if mount_category == "steering_w" and mount["ownerCategory"] != "interior" and any(m["name"] == "swheel" and m["ownerCategory"] == "interior" for m in mounts):
+            continue
         exact = installed.get(mount_category, [])
         if not exact:
             exact = next((items for category, items in installed.items() if name.startswith(category + "_")), [])
@@ -275,6 +300,32 @@ def build_scene(truck: dict, assets, cancelled=None, model_cache=None, *, prune_
             points.append({"name": name, "kind": "part", "category": available_category,
                            "accessoryId": item["id"] if item else None, **{key: mount[key] for key in IDENTITY}})
     check_cancelled()
+    headlight = next(iter(installed.get("head_light", [])), None)
+    if headlight and hasattr(assets, "head_lights"):
+        try:
+            chassis = next((part for part in parts if part["category"] == "chassis"), IDENTITY)
+            auxiliary = {}
+            rotation = chassis.get("rotation", IDENTITY["rotation"])
+            inverse = [-rotation[0], -rotation[1], -rotation[2], rotation[3]]
+            for part in parts:
+                for locator in part["model"].get("locators", []):
+                    if not (locator.get("hookup") or "").startswith("flare.vehicle.aux_light"):
+                        continue
+                    world = compose(part, locator)
+                    delta = [p - origin for p, origin in zip(world["position"], chassis.get("position", IDENTITY["position"]))]
+                    local = multiply(multiply(inverse, [*delta, 0]), rotation)[:3]
+                    mode = "roof_beam" if local[1] > 2 else "front_beam"
+                    auxiliary.setdefault(mode, []).append(local)
+            lighting = assets.head_lights(headlight["dataPath"], cancelled=cancelled, auxiliary=bool(auxiliary))
+            issues.extend(lighting.get("diagnostics", []))
+            lighting["auxiliary"] = [{"mode": mode, "position": [sum(point[axis] for point in positions) / len(positions) for axis in range(3)]}
+                                     for mode, positions in auxiliary.items()]
+            key = hashlib.sha256(json.dumps(lighting, sort_keys=True).encode()).hexdigest()
+            parts.append({"id": headlight["id"], "category": "head_light", "definition": headlight["dataPath"],
+                          "modelKey": key, "model": {"key": key, "pieces": [], "locators": [], "headLights": lighting},
+                          **{name: chassis.get(name, default) for name, default in IDENTITY.items()}})
+        except (RuntimeError, FileNotFoundError) as error:
+            issues.append(f"Headlight projection unavailable: {error}")
     if progress:
         progress("Sending vehicle preview", f"{len(parts)} visible part instances.")
     for item in parts + points:
