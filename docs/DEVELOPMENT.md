@@ -114,6 +114,10 @@ The backend checks the converter's capabilities once per executable revision. A 
 
 Materials, looks, and variants still use the small PIT exports. Both geometry paths share the same material and attachment logic and the same viewer response format. Format readers live in `backend/converter_formats.py`; the fork's local `docs/GARAGE_MODES.md` and `docs/VIEWER_FORMAT.md` describe the file contracts.
 
+Model, texture, and batch conversions preserve DX10 DDS with `--output-dds-dxt10`. This avoids ConverterPIX's unsupported BC7-to-legacy conversion for TruckersMP assets; Pillow decodes those textures into the browser PNGs. Model export keys include the texture format revision so older incomplete material exports are regenerated automatically.
+
+The shared DDS decoder normalizes BC1/BC2/BC3 sRGB identifiers and BGRA/BGRX headers in memory for Pillow, preserving source files and channel values. It also handles premultiplied alpha before producing PNGs. The viewer applies sRGB sampling; the decoder must not apply an additional gamma transform.
+
 Setup and release packaging pin the fork executable and its matching modified source archive to `cfdbd60d5654881bb8eb7997fe228e53dc1acbe7`.
 
 - [ConverterPIX-SGarage](https://github.com/Senior-S/ConverterPIX-SGarage), pinned to `cfdbd60d5654881bb8eb7997fe228e53dc1acbe7`, converts PMG/PMD resources to native viewer geometry and PIM/PIT. Its LGPL license is in `tools/ConverterPIX-LICENSE.txt`.

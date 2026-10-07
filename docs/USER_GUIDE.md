@@ -18,6 +18,8 @@ Select an installed standard driver or co-driver name plate to show **Customize 
 
 Painted addons and paintable rims show **Part color** in the same panel. This color is independent of the truck's paint job. Built-in behaviors such as GPS screens, physics and cable movement remain controlled by ETS2, not by new save fields in the garage.
 
+In advanced mode, **Raw instance fields** hides the definition path and shows a color picker for an existing `paint_color` field. Changes apply when the field loses focus and support undo/redo. Use **Save changes** to write them to the save.
+
 Drag to orbit and scroll to zoom, including inside the cab. Click a fitted part or marker to choose its category; the installed-parts list works too. Overlapping markers show a chooser so you can select the intended point.
 
 | Preview control | Options |

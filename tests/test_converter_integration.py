@@ -134,6 +134,17 @@ class ConverterIntegrationTests(unittest.TestCase):
                         with self.assertRaisesRegex(RuntimeError, 'ConverterPIX failed'):
                             self.store._run(['-m', '/vehicle/broken'])
 
+    def test_model_texture_and_batch_exports_preserve_dx10_textures(self):
+        (self.root / 'base.scs').touch()
+        self.store.tool_path = self.root / 'converter.exe'
+        self.store.tool_path.touch()
+        for arguments in (['-m', '/bus'], ['-t', '/bus.tobj'], ['--batch', 'jobs.tsv']):
+            with self.subTest(arguments=arguments), patch('backend.assets.subprocess.Popen') as popen:
+                popen.return_value.returncode = 0
+                popen.return_value.communicate.return_value = ('', '')
+                self.store._run(arguments)
+                self.assertIn('--output-dds-dxt10', popen.call_args.args[0])
+
     def test_bundled_catalog_matches_loose_truck_trailer_wheels_and_hookups(self):
         records = {
             "/def/vehicle/truck/test/chassis/base.sii": 'accessory_chassis_data : chassis.test {\nname: "Truck frame"\nmodel: "/truck.pmd"\nprice: 150\n}',

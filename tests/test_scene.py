@@ -43,6 +43,33 @@ class FakeAssets:
 
 
 class SceneTests(unittest.TestCase):
+    def test_wheel_side_variants_ignore_pin_rotation_and_keep_axle_positions(self):
+        assets = FakeAssets()
+        original = assets.model
+        def model(path, look=None, variant=None, **kwargs):
+            result = original(path, look, variant, **kwargs)
+            if path == '/chassis':
+                result['locators'][2]['rotation'] = [0, -math.sqrt(.5), 0, math.sqrt(.5)]
+            if path == '/tire':
+                result['variant'] = variant or 'left'
+                result['pieces'][0]['positions'] = [-.2 if result['variant'] == 'left' else .2, 0, 0]
+            return result
+        assets.model = model
+        truck = {'id': 'truck', 'accessories': [
+            {'id': 'frame', 'dataPath': '/chassis', 'category': 'chassis', 'type': 'vehicle_accessory', 'fields': {}, 'slots': []},
+            {'id': 'tires', 'dataPath': '/tire', 'category': 'r_tire', 'type': 'vehicle_wheel_accessory', 'fields': {'offset': '2'}, 'slots': []},
+        ]}
+        cache = {}
+        scene = build_scene(truck, assets, model_cache=cache)
+        wheels = [p for p in scene['parts'] if p['category'] == 'r_tire']
+        self.assertEqual([p['model']['variant'] for p in wheels], ['left', 'right'])
+        self.assertEqual([p['position'] for p in wheels], [[-1, .5, 2], [1, .5, 2]])
+        self.assertTrue(all(p['rotation'] == [0, 0, 0, 1] and p['scale'] == [1, 1, 1] for p in wheels))
+        self.assertNotEqual(wheels[0]['model']['key'], wheels[1]['model']['key'])
+        assets.calls.clear()
+        self.assertEqual(build_scene(truck, assets, model_cache=cache)['parts'], scene['parts'])
+        self.assertEqual(assets.calls, [])
+
     def test_plate_text_is_per_instance_and_does_not_change_shared_model_keys(self):
         assets = FakeAssets()
         original = assets.model

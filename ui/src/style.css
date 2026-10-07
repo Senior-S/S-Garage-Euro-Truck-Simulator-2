@@ -145,6 +145,7 @@ option{background:var(--raised);color:var(--text)}
 .fields-scroll label{display:flex;align-items:center;gap:8px;margin:4px 0}
 .fields-scroll label span{flex:1;font:400 11px var(--mono);color:var(--muted)}
 .fields-scroll input{width:55%;padding:5px 7px;border:1px solid var(--line-strong);border-radius:6px;background:var(--bg);font:400 11px var(--mono)}
+.fields-scroll input[type=color]{height:30px;padding:2px;cursor:pointer}
 
 .paint-controls{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
 .paint-controls h3{font-size:13px;font-weight:600;margin-bottom:4px}

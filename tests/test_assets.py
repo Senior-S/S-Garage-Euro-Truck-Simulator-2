@@ -14,6 +14,50 @@ from backend.assets import AssetStore, Image, _blocks, _parse_model, _records, _
 
 
 class AssetParserTests(unittest.TestCase):
+    def test_dx10_srgb_blocks_and_bgra_preserve_pixels_alpha_and_source(self):
+        red_block = struct.pack('<HHI', 0xf800, 0, 0)
+        fixtures = [
+            (72, red_block, (255, 0, 0, 255), 0),
+            (75, bytes([0x88]) * 8 + red_block, (255, 0, 0, 136), 0),
+            (78, bytes([128, 0]) + bytes(6) + red_block, (255, 0, 0, 128), 0),
+        ]
+        for format_id in (87, 88, 90, 91, 92, 93):
+            fixtures.append((format_id, bytes([17, 33, 65, 128]) * 16,
+                             (65, 33, 17, 128 if format_id in (87, 90, 91) else 255), 0))
+        fixtures.append((91, bytes([0, 0, 64, 128]) * 16, (127, 0, 0, 128), 2))
+        for format_id, payload, expected, alpha_mode in fixtures:
+            with self.subTest(format_id=format_id, alpha_mode=alpha_mode), tempfile.TemporaryDirectory() as directory:
+                pixel_format = struct.pack('<II4s5I', 32, 4, b'DX10', 0, 0, 0, 0, 0)
+                header = struct.pack('<7I44x', 124, 0x81007, 4, 4, len(payload), 0, 0)
+                data = b'DDS ' + header + pixel_format + struct.pack('<5I', 0x1000, 0, 0, 0, 0)
+                data += struct.pack('<5I', format_id, 3, 0, 1, alpha_mode) + payload
+                export = Path(directory) / 'models' / 'dx10'
+                export.mkdir(parents=True)
+                source = export / 'sample.dds'
+                source.write_bytes(data)
+                for opaque, alpha_only in ((False, False), (True, False), (False, True)):
+                    url = _texture_url({'texture_base': '/sample'}, export, ignore_alpha=opaque, alpha_only=alpha_only)
+                    with Image.open(Path(directory) / url.removeprefix('/cache/')) as image:
+                        self.assertEqual(image.getpixel((0, 0)), (expected[3],) * 3 if alpha_only else expected[:3] if opaque else expected)
+                self.assertEqual(source.read_bytes(), data)
+
+    def test_bc7_srgb_dx10_texture_decodes_to_browser_png(self):
+        # One BC7 mode-6 block with zero endpoints and indices: transparent black.
+        pixel_format = struct.pack('<II4s5I', 32, 4, b'DX10', 0, 0, 0, 0, 0)
+        header = struct.pack('<7I44x', 124, 0x81007, 4, 4, 16, 0, 0)
+        header += pixel_format + struct.pack('<5I', 0x1000, 0, 0, 0, 0)
+        data = b'DDS ' + header + struct.pack('<5I', 99, 3, 0, 1, 0) + b'\x40' + bytes(15)
+        with tempfile.TemporaryDirectory() as directory:
+            export = Path(directory) / 'models' / 'bc7'
+            export.mkdir(parents=True)
+            (export / 'sample.dds').write_bytes(data)
+            for opaque in (False, True):
+                url = _texture_url({'texture_base': '/sample'}, export, ignore_alpha=opaque)
+                with Image.open(Path(directory) / url.removeprefix('/cache/')) as image:
+                    self.assertEqual(image.size, (4, 4))
+                    self.assertEqual(image.getpixel((0, 0)), (0, 0, 0) if opaque else (0, 0, 0, 0))
+            self.assertEqual((export / 'sample.dds').read_bytes(), data)
+
     def test_truckersmp_compatibility_copy_preserves_source_and_payload_and_is_cached(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -298,7 +342,7 @@ physics_toy_data : .second {
 }
 ''', encoding="utf-8")
             for path in ("/base", "/head"):
-                export = root / "models" / hashlib.sha256((fingerprint + path).encode()).hexdigest()[:20]
+                export = root / "models" / hashlib.sha256((fingerprint + ":dds-dx10:" + path).encode()).hexdigest()[:20]
                 export.mkdir(parents=True)
                 (export / (path.lstrip("/") + ".pim")).write_text("exported", encoding="utf-8")
             def parsed(pim, *args):
@@ -366,7 +410,7 @@ physics_toy_data : .second {
             definition = root / "catalog" / fingerprint / "def/flag.sii"
             definition.parent.mkdir(parents=True)
             definition.write_text('physics_patch_data : .cloth {\n material: "/ar.mat"\n x_size: 0.4\n y_size: 0.25\n}\n', encoding="utf-8")
-            export = root / "models" / hashlib.sha256((fingerprint + "/flag").encode()).hexdigest()[:20]
+            export = root / "models" / hashlib.sha256((fingerprint + ":dds-dx10:/flag").encode()).hexdigest()[:20]
             export.mkdir(parents=True)
             (export / "flag.pim").write_text("Already exported", encoding="utf-8")
             (export / "ar.mat").write_text('effect : "eut2.dif.shadow.rfx" { texture : "texture_base" { source : "ar.tobj" } }', encoding="utf-8")
@@ -486,7 +530,7 @@ accessory_addon_data : mirror.left {
             entry_key = hashlib.sha256(
                 f"{asset_fingerprint}:parser-one:{definition['path']}:{selected_look}:{selected_variant}".encode()
             ).hexdigest()
-            export_key = hashlib.sha256((asset_fingerprint + model_path).encode()).hexdigest()[:20]
+            export_key = hashlib.sha256((asset_fingerprint + ":dds-dx10:" + model_path).encode()).hexdigest()[:20]
             parsed_path = Path(temp) / "models" / export_key / "parsed" / f"{entry_key}.json"
             parsed_path.parent.mkdir(parents=True)
             expected = {"pieces": [], "locators": [], "look": selected_look, "variant": selected_variant, "diagnostics": []}
@@ -516,7 +560,7 @@ accessory_addon_data : mirror.left {
             with patch.object(store, "_run", side_effect=CancelledError()):
                 with self.assertRaises(CancelledError):
                     store.model(definition["path"], cancelled=lambda: False)
-            export_key = hashlib.sha256((store._fingerprint() + "/vehicle/test/chassis").encode()).hexdigest()[:20]
+            export_key = hashlib.sha256((store._fingerprint() + ":dds-dx10:/vehicle/test/chassis").encode()).hexdigest()[:20]
             marker = Path(temp) / "models" / export_key / "vehicle" / "test" / "chassis.export-incomplete"
             self.assertTrue(marker.is_file())
 

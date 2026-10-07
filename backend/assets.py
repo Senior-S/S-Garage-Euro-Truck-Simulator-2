@@ -413,6 +413,9 @@ class AssetStore:
             raise RuntimeError(self.status()["message"])
         features = self._converter_capabilities()
         arguments = list(arguments)
+        if any(mode in arguments for mode in ("-m", "-t", "--batch")):
+            # BC7 cannot be represented in legacy DDS. Pillow decodes DX10 directly.
+            arguments.append("--output-dds-dxt10")
         if features.get("definitionBundle") and "--extract-directory" in arguments:
             index = arguments.index("--extract-directory")
             if arguments[index + 1] == "/def/vehicle":
@@ -700,8 +703,7 @@ class AssetStore:
                     if not file.is_file():
                         file.parent.mkdir(parents=True, exist_ok=True)
                         self._run(["-e", str(root), "-t", path], cancelled=cancelled)
-                    with Image.open(file) as image:
-                        return image.copy()
+                    return _decode_dds(file.read_bytes())
 
                 rendered = render_driver_plate(text, read_text, load_texture)
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -801,7 +803,7 @@ class AssetStore:
         variant = _unquote(variant) if variant else model_variant
         fingerprint = fingerprint or self._fingerprint()
         cache_key = hashlib.sha256(f"{fingerprint}:{self._parser_fingerprint}:{entry['path']}:{look}:{variant}".encode()).hexdigest()
-        key = hashlib.sha256((fingerprint + model_path).encode()).hexdigest()[:20]
+        key = hashlib.sha256((fingerprint + ":dds-dx10:" + model_path).encode()).hexdigest()[:20]
         export = self.cache_path / "models" / key
         return model_path, look, variant, cache_key, export, export / "parsed" / f"{cache_key}.json"
 
@@ -1220,6 +1222,32 @@ def _parse_model(pim_path: Path, pit_path: Path | None, export: Path, selected_l
     return {"pieces": pieces, "locators": locators, "bones": native["bones"] if native else [], "look": look_name, "variant": variant_name, "diagnostics": [] if pit_path else ["PIT material traits are missing; geometry uses neutral material values."]}
 
 
+def _decode_dds(data: bytes):
+    """Decode DDS variants through Pillow without modifying the exported file."""
+    premultiplied = data[:4] == b"DDS " and data[84:88] in (b"DXT2", b"DXT4")
+    if premultiplied:
+        data = data[:84] + (b"DXT3" if data[84:88] == b"DXT2" else b"DXT5") + data[88:]
+    elif len(data) >= 148 and data[:4] == b"DDS " and data[84:88] == b"DX10":
+        format_id = struct.unpack_from("<I", data, 128)[0]
+        premultiplied = struct.unpack_from("<I", data, 144)[0] & 7 == 2
+        # sRGB and UNORM use identical block encodings. The viewer applies sRGB
+        # sampling to the resulting PNG; no gamma transform belongs here.
+        linear_format = {72: 71, 75: 74, 78: 77}.get(format_id)
+        if linear_format:
+            data = data[:128] + struct.pack("<I", linear_format) + data[132:]
+        elif format_id in (87, 88, 90, 91, 92, 93):
+            # Pillow supports masked legacy RGB, but not DX10 BGRA/BGRX.
+            alpha = format_id in (87, 90, 91)
+            pixel_format = struct.pack("<8I", 32, 0x41 if alpha else 0x40, 0, 32,
+                                       0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000 if alpha else 0)
+            data = data[:76] + pixel_format + data[108:128] + data[148:]
+    with Image.open(BytesIO(data)) as image:
+        converted = image.convert("RGBA")
+    if premultiplied:
+        converted = Image.frombytes("RGBa", converted.size, converted.tobytes()).convert("RGBA")
+    return converted
+
+
 def _texture_url(textures: dict[str, str], export: Path, ignore_alpha: bool = False, alpha_only: bool = False) -> str | None:
     if Image is None:
         return None
@@ -1235,17 +1263,8 @@ def _texture_url(textures: dict[str, str], export: Path, ignore_alpha: bool = Fa
     target = source.with_name(source.stem + (".alpha.png" if alpha_only else ".opaque.png" if ignore_alpha else ".png"))
     if not target.is_file():
         if source.suffix.lower() == ".dds":
-            data = source.read_bytes()
-            premultiplied_alpha = data[:4] == b"DDS " and data[84:88] == b"DXT4"
-            if premultiplied_alpha:
-                # DXT4 and DXT5 share the BC3 block layout; DXT4 marks RGB as
-                # premultiplied by alpha. Pillow decodes DXT5 blocks directly.
-                data = data[:84] + b"DXT5" + data[88:]
-            with Image.open(BytesIO(data)) as image:
-                converted = image.convert("RGBA")
-                if premultiplied_alpha:
-                    converted = Image.frombytes("RGBa", converted.size, converted.tobytes()).convert("RGBA")
-                (converted.getchannel("A").convert("RGB") if alpha_only else converted.convert("RGB") if ignore_alpha else converted).save(target, format="PNG")
+            converted = _decode_dds(source.read_bytes())
+            (converted.getchannel("A").convert("RGB") if alpha_only else converted.convert("RGB") if ignore_alpha else converted).save(target, format="PNG")
         else:
             with Image.open(source) as image:
                 (image.convert("RGBA").getchannel("A").convert("RGB") if alpha_only else image.convert("RGB") if ignore_alpha else image).save(target, format="PNG")

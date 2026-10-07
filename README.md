@@ -11,7 +11,7 @@
 
 ### Known missing features and limitations
 
-- **v0.3.3 replaces the bundled Pascal decryptor with SII Decrypt C++ to fix binary save decoding failures.** It includes automatic converter detection, the Unicode path fix, linked trailer editing, and corrected trailer paint previews. This remains a prerelease; keep backups and inspect edited trucks in ETS2.
+- **v0.4.0 redesigns the garage UI and adds accessory customization and in-game plate lettering previews.** It also fixes TruckersMP model imports, texture decoding, wheel placement, and update checks. This remains a prerelease; keep backups and inspect edited trucks in ETS2.
 - Painting uses truck paint jobs and their supported color channels. Independent recoloring of arbitrary parts is not available, and metallic finishes only approximate the game's shaders.
 - Some parts, materials, lighting, and mod assets may render incorrectly or be missing from the preview.
 - Some accessory combinations may not work correctly in ETS2, even if they appear in the garage.
@@ -47,7 +47,7 @@ These are real captures of the app using locally installed game assets. The prev
 You need **Windows 10 version 1903 or newer, or Windows 11, 64-bit**, an installed copy of **Euro Truck Simulator 2**, and a browser with WebGL support. S Garage uses your installed game, DLC, and available mods. Game assets and saves are not included in the download.
 
 1. Open the **[Downloads page](https://github.com/Senior-S/S-Garage-Euro-Truck-Simulator-2/releases)**. A GitHub account is not required.
-2. Under **Assets**, download **`S-Garage-v0.3.3-Windows-x64.zip`**. Choose this file instead of GitHub's automatically generated “Source code” downloads.
+2. Under **Assets**, download **`S-Garage-v0.4.0-Windows-x64.zip`**. Choose this file instead of GitHub's automatically generated “Source code” downloads.
 3. Right-click the ZIP and select **Extract All**. Keep the extracted files together.
 4. Open the extracted **S Garage** folder and double-click **`S Garage.exe`**.
 5. Your browser opens the garage. Keep the small S Garage window open while editing; use **Stop garage** when finished.

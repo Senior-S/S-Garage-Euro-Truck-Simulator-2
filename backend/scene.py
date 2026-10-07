@@ -140,10 +140,11 @@ def build_scene(truck: dict, assets, cancelled=None, model_cache=None, *, prune_
         check_cancelled()
 
     # A model conversion is shared by all save instances of the same definition.
-    def model_for(entry, accessory=None):
+    def model_for(entry, accessory=None, *, wheel_variant=None):
         check_cancelled()
         fields = accessory.get("fields", {}) if accessory else {}
         look, variant = fields.get("look"), fields.get("variant")
+        variant = wheel_variant or variant
         key = entry["path"], look, variant
         used_models.add(key)
         if key not in models:
@@ -212,6 +213,9 @@ def build_scene(truck: dict, assets, cancelled=None, model_cache=None, *, prune_
             check_cancelled()
             name = locator["name"]
             world = compose(transform, locator)
+            if re.fullmatch(r"wheel_[fr]_\d+(?:_\d+)?", name):
+                # Wheel rotation belongs to the axle, not the locator's pin orientation.
+                world["rotation"] = list(transform.get("rotation") or IDENTITY["rotation"])
             slot = name.startswith("slot_") or any(s["name"] == name for s in accessory.get("slots", []))
             builtin = locator.get("hookup")
             if slot:
@@ -273,11 +277,22 @@ def build_scene(truck: dict, assets, cancelled=None, model_cache=None, *, prune_
                 prefix = "wheel_f_" if front else "wheel_r_"
                 targets = [m for m in mounts if any(re.fullmatch(prefix + str(side) + r"(?:_\d+)?", m["name"]) for side in (offset, offset + 1))]
                 for mount in targets:
-                    # Wheel components are modeled for the outer face on the right side.
                     transform = {**mount, "scale": list(mount["scale"])}
-                    if mount["position"][0] < 0:
+                    side = "left" if int(mount["name"].split("_")[2]) % 2 == 0 else "right"
+                    wheel_model = model
+                    if model.get("variant") in ("left", "right"):
+                        if model["variant"] != side:
+                            try:
+                                wheel_model = model_for(by_path[accessory["dataPath"]], accessory, wheel_variant=side)
+                            except (ValueError, FileNotFoundError, RuntimeError) as error:
+                                issues.append(f'{category} ({side}): {error}')
+                                continue
+                        if wheel_model.get("variant") != side:
+                            transform["scale"][0] *= -1
+                    elif side == "left":
+                        # Legacy models without side variants use the right-side mesh.
                         transform["scale"][0] *= -1
-                    place(accessory, model, {key: transform[key] for key in IDENTITY})
+                    place(accessory, wheel_model, {key: transform[key] for key in IDENTITY})
             else:
                 if category == "interior":
                     targets = [m for m in mounts if m["name"] == "ext_interior"]
