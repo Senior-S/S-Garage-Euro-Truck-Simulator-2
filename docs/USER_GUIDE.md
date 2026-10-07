@@ -4,6 +4,10 @@
 
 ## Choose a truck
 
+TruckersMP assets are detected automatically when you open a save. S Garage reads the launcher's configured installation path, with fallback checks for the standard AppData and ProgramData locations. Installed ETS2 and shared packs supply models and textures for owned cars, buses, and TruckersMP accessories. ATS packs are excluded, and saved mods retain higher load priority. The first import prepares cached compatibility copies of TruckersMP archives; it does not modify the installation. Reopen the save after updating TruckersMP to refresh the imported assets.
+
+On startup, the garage checks GitHub for a newer stable release without delaying editing. If the first attempt fails, it retries up to three times. An update notice links to the releases page; if GitHub cannot be reached, the notice says a newer version may be available. You can dismiss either notice. Updates are downloaded manually.
+
 Select **Profile**, **Save file**, then an owned **Truck**. Switching trucks cancels the previous model load. Opening a save reads a temporary decrypted copy; the original changes only when you click **Save changes**.
 
 ## Explore
@@ -12,8 +16,11 @@ Drag to orbit and scroll to zoom, including inside the cab. Click a fitted part 
 
 | Preview control | Options |
 | --- | --- |
+| Lighting | **Day** by default; **Afternoon** uses warmer, lower sunlight; **Night** dims the surroundings so truck lights are easier to inspect. |
 | Lights | **Off** by default; **Low** for low beams and position lights; **High** adds high beams and auxiliary lights. |
 | Markers | **All** by default; **Selected only** keeps the selected marker visible; **Hidden** clears the view. |
+
+Headlight previews use the installed definition's beam masks, colors, reflector positions, angles, and ranges. Lamp emission stays on the actual lens geometry. Auxiliary beam illumination is grouped at the front and roof to keep large lightbars responsive. Brightness and reflections remain approximate browser renderings; brake lights, indicators, and reversing lights stay off in this parked preview.
 
 These controls do not change your save.
 
@@ -34,6 +41,8 @@ Mixed-brand parts can lack a compatible locator or behave differently in game. A
 Click **Paint** above the 3D view, or select the installed paint job. The catalog shows paint jobs from your installed game, DLC, and mods for the current truck and cab. Designs with artwork show that artwork on your selected cab, using the paint's default colors. Hover over a preview to rotate it and see both sides. Plain-color paints keep their color swatches.
 
 Only visible previews load, and thumbnails are cached locally. Switching categories cancels unfinished previews. Browsing or hovering over a paint does not change your truck or its edit history.
+
+Local paint-only mods are discovered when you open a save, even if that save has not used them yet. The garage reads `.scs` and `.zip` packages and extracted folders in your ETS2 `mod` directory. It also recognizes paint files extracted directly into that directory. Other mods follow the save's active mod list and load order. Enable the paint mod in ETS2 before using its paint job in game.
 
 Choose a paint job to apply it to the truck preview. In **Paint colors** on the left, change the base, design, metallic-flake, or flip colors supported by that paint job, then click **Apply colors**. Colors marked **Locked** cannot be edited for that design. Each application is one undoable change; your save is written only when you click **Save changes**.
 
