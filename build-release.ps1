@@ -14,7 +14,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'UI build failed.' }
     } finally { Pop-Location }
     & ./setup-tools.ps1
-    & python -m PyInstaller --noconfirm --onedir --windowed --name 'S Garage' --paths backend --add-data 'ui/dist:ui/dist' --add-data 'tools:tools' --add-data 'backend/assets.py:.' --add-data 'backend/converter_formats.py:.' --add-data 'VERSION:.' desktop.py
+    & python -m PyInstaller --noconfirm --onedir --windowed --name 'S Garage' --paths backend --add-data 'ui/dist:ui/dist' --add-data 'tools:tools' --add-data 'backend/assets.py:.' --add-data 'backend/converter_formats.py:.' --add-data 'backend/plate_text.py:.' --add-data 'VERSION:.' desktop.py
     if ($LASTEXITCODE -ne 0) { throw 'Portable application build failed.' }
     & python scripts/package-release.py $Version
     if ($LASTEXITCODE -ne 0) { throw 'Release packaging failed.' }

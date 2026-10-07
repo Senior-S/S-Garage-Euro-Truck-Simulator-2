@@ -12,11 +12,30 @@ function frameTruck(camera, controls, size, center) {
   camera.position.copy(center).add(new THREE.Vector3(distance * .56, size.y * .5 + distance * .31, -distance * .76))
 }
 
-export default function GarageScene({ onPick, onFailure, onIssues, onLoading, markerLabel, selectedAccessoryId, selectedVehicleId, selectedMarker, truckKey, sceneRevision, sessionId, truckId, cancelRef, lightMode = 'off', markerVisibility = 'all', timeOfDay = 'day' }) {
+// Seats the camera behind the steering wheel, or in the upper interior when no wheel is fitted.
+function interiorPose(group) {
+  const wheel = new THREE.Box3(), interior = new THREE.Box3(), quaternion = new THREE.Quaternion()
+  group.traverse(object => {
+    const category = object.isMesh && object.userData.section === 1 && object.userData.category
+    if (category === 'steering_w') wheel.expandByObject(object)
+    else if (category === 'interior') interior.expandByObject(object)
+    else if (category === 'chassis') object.parent.getWorldQuaternion(quaternion)
+  })
+  if (wheel.isEmpty() && interior.isEmpty()) return null
+  // Vehicles face -Z; leaning back from the wheel keeps the dashboard in view.
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(quaternion), up = new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion)
+  const head = wheel.isEmpty()
+    ? interior.getCenter(new THREE.Vector3()).addScaledVector(up, interior.getSize(new THREE.Vector3()).y * .2)
+    : wheel.getCenter(new THREE.Vector3()).addScaledVector(forward, -.55).addScaledVector(up, .42)
+  return { head, target: head.clone().addScaledVector(forward, .05).addScaledVector(up, -.012) }
+}
+
+export default function GarageScene({ onPick, onFailure, onIssues, onLoading, markerLabel, selectedAccessoryId, selectedVehicleId, selectedMarker, truckKey, sceneRevision, sessionId, truckId, cancelRef, lightMode = 'off', markerVisibility = 'all', timeOfDay = 'day', cameraView = 'exterior', onCameraViewUnavailable }) {
   const host = React.useRef(null)
   const modelGroup = React.useRef(null)
   const runtime = React.useRef(null)
-  const callbacks = React.useRef({ onPick, onFailure, onIssues, onLoading }); callbacks.current = { onPick, onFailure, onIssues, onLoading }
+  const callbacks = React.useRef({ onPick, onFailure, onIssues, onLoading, onCameraViewUnavailable }); callbacks.current = { onPick, onFailure, onIssues, onLoading, onCameraViewUnavailable }
+  const cameraViewRef = React.useRef(cameraView); cameraViewRef.current = cameraView
   const selectedRef = React.useRef(null); selectedRef.current = { id: selectedAccessoryId, vehicleId: selectedVehicleId, marker: selectedMarker }
   const previewRef = React.useRef(null); previewRef.current = { lightMode, markerVisibility }
   const highlight = ({ id, vehicleId, marker }) => modelGroup.current?.traverse(object => {
@@ -43,6 +62,7 @@ export default function GarageScene({ onPick, onFailure, onIssues, onLoading, ma
   })
   const [loading, setLoading] = React.useState(true)
   const [markerChoices, setMarkerChoices] = React.useState(null)
+  const [showOrbitHint, setShowOrbitHint] = React.useState(true)
   React.useEffect(() => {
     let scene, camera, renderer, controls, group, observer, frame = 0, disposed = false
     const requestRender = () => {
@@ -75,7 +95,8 @@ export default function GarageScene({ onPick, onFailure, onIssues, onLoading, ma
     const raycaster = new THREE.Raycaster(), pointer = new THREE.Vector2(), projected = new THREE.Vector3()
     let press = null, dragged = false
     const pointerDown = event => { setMarkerChoices(null); if (!event.isPrimary) { dragged = true; return } press = { x: event.clientX, y: event.clientY, button: event.button }; dragged = false }
-    const pointerMove = event => { if (press && Math.hypot(event.clientX - press.x, event.clientY - press.y) > 4) dragged = true }
+    const pointerMove = event => { if (press && Math.hypot(event.clientX - press.x, event.clientY - press.y) > 4) { dragged = true; if (current.initialized) setShowOrbitHint(false) } }
+    const wheel = event => { if (current.initialized && event.deltaY) setShowOrbitHint(false) }
     const pointerUp = event => { pointerMove(event); if (press?.button > 0) dragged = true; press = null }
     const pointerCancel = () => { press = null; dragged = true }
     const click = event => {
@@ -105,11 +126,24 @@ export default function GarageScene({ onPick, onFailure, onIssues, onLoading, ma
     renderer.domElement.addEventListener('pointerup', pointerUp)
     renderer.domElement.addEventListener('pointercancel', pointerCancel)
     renderer.domElement.addEventListener('click', click)
+    renderer.domElement.addEventListener('wheel', wheel, { passive: true })
     const reset = () => {
       if (current.box.isEmpty()) { controls.target.set(0, 1, 0); camera.position.set(9.4, 5.7, -9.4) }
       else frameTruck(camera, controls, current.box.getSize(new THREE.Vector3()), current.box.getCenter(new THREE.Vector3()))
       controls.update()
       requestRender()
+    }
+    current.applyCameraView = () => {
+      const pose = cameraViewRef.current === 'interior' && interiorPose(group)
+      if (pose) {
+        current.exterior ||= { position: camera.position.clone(), target: controls.target.clone() }
+        camera.position.copy(pose.head); controls.target.copy(pose.target); controls.maxPolarAngle = Math.PI
+      } else {
+        if (cameraViewRef.current === 'interior') callbacks.current.onCameraViewUnavailable?.()
+        if (current.exterior) { camera.position.copy(current.exterior.position); controls.target.copy(current.exterior.target); current.exterior = null }
+        controls.maxPolarAngle = Math.PI * .49
+      }
+      controls.update(); requestRender()
     }
     window.addEventListener('yard-reset-view', reset)
     controls.addEventListener('change', requestRender)
@@ -122,6 +156,7 @@ export default function GarageScene({ onPick, onFailure, onIssues, onLoading, ma
       document.removeEventListener('visibilitychange', requestRender)
       window.removeEventListener('yard-reset-view', reset)
       renderer.domElement.removeEventListener('click', click)
+      renderer.domElement.removeEventListener('wheel', wheel)
       renderer.domElement.removeEventListener('pointerdown', pointerDown)
       renderer.domElement.removeEventListener('pointermove', pointerMove)
       renderer.domElement.removeEventListener('pointerup', pointerUp)
@@ -134,7 +169,8 @@ export default function GarageScene({ onPick, onFailure, onIssues, onLoading, ma
     const current = runtime.current
     if (!current) return
     if (current.truckKey !== truckKey) {
-      current.truckKey = truckKey; current.initialized = false; current.revision = -1
+      current.truckKey = truckKey; current.initialized = false; current.revision = -1; current.exterior = null
+      setShowOrbitHint(true)
     }
     let live = true
     const controller = new AbortController(), requestId = crypto.randomUUID()
@@ -168,6 +204,7 @@ export default function GarageScene({ onPick, onFailure, onIssues, onLoading, ma
         current.controls.maxDistance = Math.max(20, Math.max(size.x, size.z) * 6)
         if (!current.initialized) frameTruck(current.camera, current.controls, size, current.box.getCenter(new THREE.Vector3()))
       }
+      if (!current.initialized && cameraViewRef.current === 'interior') current.applyCameraView()
       current.renderer.domElement.dataset.minZoomDistance = String(current.controls.minDistance)
       current.renderer.domElement.dataset.maxZoomDistance = String(current.controls.maxDistance)
       current.revision = data.revision; current.initialized = true
@@ -195,11 +232,12 @@ export default function GarageScene({ onPick, onFailure, onIssues, onLoading, ma
     current.requestRender()
   }, [timeOfDay])
 
+  React.useEffect(() => { if (runtime.current?.initialized) runtime.current.applyCameraView() }, [cameraView])
   React.useEffect(() => {
     if (runtime.current) runtime.current.lightMode.value = ['off', 'low', 'high'].indexOf(lightMode)
     highlight(selectedRef.current)
     runtime.current?.requestRender()
     setMarkerChoices(null)
   }, [selectedAccessoryId, selectedVehicleId, selectedMarker, markerVisibility, lightMode, truckKey])
-  return <><div ref={host} className="three-host" aria-label="Interactive truck model. Drag to orbit and scroll to zoom."/>{markerChoices && <div className="marker-picker" role="dialog" aria-label="Choose attachment point" style={{ left: markerChoices.x, top: markerChoices.y }}><div className="marker-picker-heading"><span>Choose attachment point</span><button aria-label="Close attachment chooser" onClick={() => setMarkerChoices(null)}>×</button></div><div className="marker-picker-options">{markerChoices.points.map((point, index) => <button key={index} onClick={() => { setMarkerChoices(null); callbacks.current.onPick?.(point) }}>{markerLabel(point)}</button>)}</div></div>}{loading && !onLoading && <div className="scene-wait"><span className="loading-pulse"/>ASSEMBLING SAVE GEOMETRY</div>}</>
+  return <><div ref={host} className="three-host" aria-label="Interactive truck model. Drag to orbit and scroll to zoom."/>{showOrbitHint && <span className="orbit-hint">Drag to orbit, scroll to zoom, click a part to select it</span>}{markerChoices && <div className="marker-picker" role="dialog" aria-label="Choose attachment point" style={{ left: markerChoices.x, top: markerChoices.y }}><div className="marker-picker-heading"><span>Choose attachment point</span><button aria-label="Close attachment chooser" onClick={() => setMarkerChoices(null)}>×</button></div><div className="marker-picker-options">{markerChoices.points.map((point, index) => <button key={index} onClick={() => { setMarkerChoices(null); callbacks.current.onPick?.(point) }}>{markerLabel(point)}</button>)}</div></div>}{loading && !onLoading && <div className="scene-wait"><span className="loading-pulse"/>ASSEMBLING SAVE GEOMETRY</div>}</>
 }

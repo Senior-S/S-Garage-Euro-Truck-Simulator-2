@@ -43,6 +43,35 @@ class FakeAssets:
 
 
 class SceneTests(unittest.TestCase):
+    def test_plate_text_is_per_instance_and_does_not_change_shared_model_keys(self):
+        assets = FakeAssets()
+        original = assets.model
+        def model(path, **kwargs):
+            result = original(path, **kwargs)
+            result['pieces'][0]['material']['driverPlate'] = True
+            return result
+        assets.model = model
+        assets.driver_plate_texture = lambda text, cancelled: '/text/' + text
+        truck = {'id': 'truck', 'accessories': [
+            {'id': 'first', 'dataPath': '/chassis', 'category': 'chassis', 'fields': {'text': '"Senior S"'}, 'slots': []},
+            {'id': 'second', 'dataPath': '/chassis', 'category': 'chassis', 'fields': {'text': '"Other"'}, 'slots': []},
+        ]}
+        cache = {}
+        result = build_scene(truck, assets, model_cache=cache)
+        self.assertEqual([part['textTexture'] for part in result['parts']], ['/text/Senior S', '/text/Other'])
+        keys = [part['model']['key'] for part in result['parts']]
+        truck['accessories'][0]['fields']['text'] = '""'
+        again = build_scene(truck, assets, model_cache=cache)
+        self.assertEqual([part['model']['key'] for part in again['parts']], keys)
+        self.assertEqual([part['textTexture'] for part in again['parts']], ['/text/', '/text/Other'])
+        with patch.object(assets, 'driver_plate_texture', side_effect=OSError('font missing')):
+            failed = build_scene(truck, assets, model_cache=cache)
+        self.assertEqual(len(failed['parts']), 2)
+        self.assertTrue(any('font missing' in issue for issue in failed['issues']))
+        with patch.object(assets, 'driver_plate_texture', side_effect=CancelledError):
+            with self.assertRaises(CancelledError):
+                build_scene(truck, assets, model_cache=cache)
+
     def test_model_less_headlights_get_a_stable_rig_without_importing_geometry(self):
         assets = FakeAssets()
         assets.entries.append({"path": "/lights", "unitId": "lights", "category": "head_light", "model": None})
@@ -197,6 +226,12 @@ class SceneTests(unittest.TestCase):
         repainted = build_scene(truck, assets, model_cache=cache)
         self.assertIs(repainted["parts"][0]["model"], scene["parts"][0]["model"])
         self.assertEqual(repainted["parts"][0]["paint"]["color"], [0, 1, 0])
+        # Explicitly paintable addons use their own color, without the truck atlas.
+        assets.entries[-1]["unitType"] = "accessory_addon_painted_data"
+        independent = build_scene(truck, assets, model_cache=cache)
+        shield = next(part for part in independent["parts"] if part["category"] == "sunshld")
+        self.assertEqual(shield["paint"]["color"], [0, 0, 0])
+        self.assertNotIn("paintTexture", shield["paint"])
 
     def test_marker_edit_reuses_base_models_and_imports_only_new_hookup(self):
         assets = FakeAssets()

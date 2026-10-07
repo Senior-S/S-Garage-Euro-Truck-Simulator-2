@@ -17,7 +17,7 @@ import traceback
 from urllib.parse import parse_qs, unquote, urlsplit
 import webbrowser
 
-from assets import AssetStore, _numbers
+from assets import AssetStore, _numbers, accessory_options
 from saves import SaveSession, read_sii, game_running
 from scene import build_scene, paint_material
 from mods import resolve_mods
@@ -324,6 +324,7 @@ class Handler(BaseHTTPRequestHandler):
                             if entry.get("unitType", "").startswith("physics_"):
                                 continue
                             item = {key: entry.get(key) for key in visible}
+                            item["options"] = accessory_options(entry)
                             # Price/unlock do not change an accessory in this editor.
                             fields = {key: value for key, value in entry.get("fields", {}).items() if key not in ("price", "unlock")}
                             signature = [entry.get("category"), entry.get("unitType"), entry.get("name"), fields]
@@ -370,7 +371,7 @@ class Handler(BaseHTTPRequestHandler):
                     settings = paint["fields"]
                     name = settings.get("name", entry["name"]).strip("@").removeprefix("pj_").replace("_", " ").title()
                     signature = [name, {key: value for key, value in settings.items() if key not in ("price", "unlock")}]
-                    entries.append({**entry, "name": name, "paintFields": settings, "suitableFor": paint["suitableFor"],
+                    entries.append({**entry, "name": name, "paintFields": settings, "suitableFor": paint["suitableFor"], "options": accessory_options(entry),
                                     "duplicateKey": hashlib.sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()})
                 self.json_response(entries)
             elif parsed.path == "/api/model":

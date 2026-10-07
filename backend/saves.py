@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 import uuid
 from datetime import datetime, timezone
-from assets import _numbers
+from assets import _numbers, accessory_options
 
 
 UNIT = re.compile(r"^(\w+)\s*:\s*([\w.]+)\s*\{\r?\n.*?^\}", re.M | re.S)
@@ -238,7 +238,7 @@ class SaveSession:
             raise ValueError("Choose an accessory from the selected vehicle.")
         block = self.block(unit_id) if unit_id else ""
         new_id = "_nameless.e75." + uuid.uuid4().hex[:8] + ".0001"
-        if op in ("replace", "fields", "hookup", "paint") and any(
+        if op in ("replace", "fields", "hookup", "paint", "options") and any(
             other_id != truck_id and re.search(r"^[ \t]+accessories\[\d+\]: " + re.escape(unit_id) + r"\r?$", self.block(other_id), re.M)
             for other_id in self.units if self.units[other_id][0] in ("vehicle", "trailer", "bus")
         ):
@@ -247,7 +247,28 @@ class SaveSession:
             block = re.sub(r"^(\w+)\s*:\s*[\w.]+", lambda m: f"{m[1]} : {new_id}", block, count=1)
             unit_id = new_id
             changes[truck_id] = set_array(truck, "accessories", ids)
-        if op == "paint":
+        if op == "options":
+            definition = catalog.get(unquote(fields(block)["data_path"]), {})
+            options = accessory_options(definition)
+            values = request.get("options")
+            if not isinstance(values, dict) or not values or values.keys() - {"text", "paint_color"}:
+                raise ValueError("Choose a supported accessory option.")
+            for key, value in values.items():
+                if key == "text":
+                    if not options["text"] and not block.startswith("vehicle_drv_plate_accessory :"):
+                        raise ValueError("This accessory does not support custom text.")
+                    if not isinstance(value, str) or len(value) > 1024 or any(ord(char) < 32 for char in value):
+                        raise ValueError("Plate text must be a single line of at most 1024 characters.")
+                    block = re.sub(r"^\w+(?=\s*:)", "vehicle_drv_plate_accessory", block, count=1)
+                    block = set_field(block, key, json.dumps(value, ensure_ascii=False))
+                else:
+                    if not options["paintColor"]:
+                        raise ValueError("This accessory does not support an independent paint color.")
+                    if not isinstance(value, list) or len(value) != 3 or any(type(v) not in (int, float) or not math.isfinite(v) or not 0 <= v <= 1 for v in value):
+                        raise ValueError("Accessory colors must contain three numbers between 0 and 1.")
+                    block = set_field(block, key, "(" + ", ".join(format(v, ".9g") for v in value) + ")")
+            changes[unit_id] = block
+        elif op == "paint":
             if category(unquote(fields(block)["data_path"])) != "paint_job":
                 raise ValueError("Choose the vehicle's paint job before painting.")
             path = request.get("dataPath") or unquote(fields(block)["data_path"])
@@ -307,6 +328,13 @@ class SaveSession:
                 changes[new_id] = block
                 ids.append(new_id)
                 changes[truck_id] = set_array(truck, "accessories", ids)
+            target_id = unit_id if op == "replace" else new_id
+            options = accessory_options(definition)
+            if options["text"]:
+                block = re.sub(r"^\w+(?=\s*:)", "vehicle_drv_plate_accessory", changes[target_id], count=1)
+                changes[target_id] = set_field(block, "text", fields(block).get("text", '""'))
+            if options["paintColor"] and op == "add" and not source:
+                changes[target_id] = set_field(changes[target_id], "paint_color", options["defaultColor"])
         elif op == "duplicate":
             changes[new_id] = re.sub(r"^(\w+)\s*:\s*[\w.]+", lambda m: f"{m[1]} : {new_id}", block, count=1)
             ids.insert(ids.index(unit_id) + 1, new_id)
@@ -370,7 +398,7 @@ class SaveSession:
             path = unquote(fields(block).get("data_path", '""')) if block else request.get("dataPath", "")
             definition = catalog.get(request.get("dataPath") or path, {})
             label = definition.get("name") or category(path).replace("_", " ").title()
-            action = {"add": "Add", "replace": "Replace", "duplicate": "Duplicate", "remove": "Remove", "fields": "Edit fields on", "paint": "Paint", "hookup": "Change attachment on"}[op]
+            action = {"add": "Add", "replace": "Replace", "duplicate": "Duplicate", "remove": "Remove", "fields": "Edit fields on", "options": "Customize", "paint": "Paint", "hookup": "Change attachment on"}[op]
             if op == "paint" and request.get("colors"):
                 labels = {"base_color": "base color", "mask_r_color": "design color 1", "mask_g_color": "design color 2", "mask_b_color": "design color 3", "flake_color": "metallic flakes", "flip_color": "flip color"}
                 action = "Change " + ", ".join(labels[key] for key in request["colors"]) + " on"

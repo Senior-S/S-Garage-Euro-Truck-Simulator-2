@@ -12,6 +12,12 @@ Select **Profile**, **Save file**, then an owned **Truck**. Switching trucks can
 
 ## Explore
 
+Use the catalog's **Special features** filter to find custom text, independent accessory colors, and parts with built-in behaviors such as physics toys, cloth, live displays, horns, lights, tanks, cables and animations. Defined looks and variants describe the installed definition, not an arbitrary new save setting. Other catalog filters still apply; choose all categories and brands to search across vehicles.
+
+Select an installed standard driver or co-driver name plate to show **Customize part → Plate text**. Click **Apply options** to update the truck preview, then **Save changes** to write it to the save. New standard plates use the game's text-capable accessory type automatically. Text supports undo/redo and duplication. The preview reads the installed game's license-plate font and plate layout, and uses the model's original UV placement. The stock font displays capitals, digits, spaces, and hyphens; lowercase uses capital glyphs without changing the saved text. Unsupported characters appear as spaces, and text wider than the plate is clipped. Fixed-art logos and lightboxes do not gain custom lettering. Existing text-capable saved units retain their text editor even when a swapped model does not display it.
+
+Painted addons and paintable rims show **Part color** in the same panel. This color is independent of the truck's paint job. Built-in behaviors such as GPS screens, physics and cable movement remain controlled by ETS2, not by new save fields in the garage.
+
 Drag to orbit and scroll to zoom, including inside the cab. Click a fitted part or marker to choose its category; the installed-parts list works too. Overlapping markers show a chooser so you can select the intended point.
 
 | Preview control | Options |

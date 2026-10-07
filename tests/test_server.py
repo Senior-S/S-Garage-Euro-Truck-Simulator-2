@@ -355,6 +355,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(len(catalog), len(entries) - 1)
         self.assertEqual(catalog[0]["duplicateKey"], catalog[1]["duplicateKey"])
         self.assertEqual(len({item["duplicateKey"] for item in catalog}), 5)
+        self.assertIn("Live display", catalog[3]["options"]["features"])
 
     def test_saves_identify_profiles_and_order_newest_first(self):
         newer = self.path.parent.with_name("manual")

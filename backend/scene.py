@@ -6,7 +6,7 @@ import re
 import hashlib
 import json
 from concurrent.futures import CancelledError
-from assets import _numbers
+from assets import _numbers, accessory_options
 
 
 IDENTITY = {"position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]}
@@ -164,16 +164,31 @@ def build_scene(truck: dict, assets, cancelled=None, model_cache=None, *, prune_
         paint_texture = override or paint_job.get("texture")
         if paint_texture:
             instance_color = paint_fields.get("base_color")
+        options = accessory_options(definition)
+        if options["paintColor"]:
+            instance_color = accessory["fields"].get("paint_color") or options["defaultColor"]
+            paint_texture = None
         color = _numbers(instance_color)[:3] if instance_color else None
         paint = None
         # Material metadata identifies paint shaders. Geometry is reused unchanged.
         if color and any(piece["material"].get("paintable") for piece in model["pieces"]):
-            paint = paint_material(color, paint_fields, paint_texture)
+            paint = paint_material(color, {} if options["paintColor"] else paint_fields, paint_texture)
             accessory_color = accessory["fields"].get("paint_color")
             if accessory_color:
                 paint["accessoryColor"] = _numbers(accessory_color)[:3]
+        text_texture = None
+        if any(piece["material"].get("driverPlate") for piece in model["pieces"]):
+            text = accessory["fields"].get("text", '""')
+            try:
+                text = json.loads(text)
+            except (ValueError, TypeError):
+                pass
+            try:
+                text_texture = assets.driver_plate_texture(str(text), cancelled)
+            except (OSError, RuntimeError, ValueError, AttributeError, IndexError) as error:
+                issues.append(f'{accessory["category"]}: plate text preview unavailable: {error}')
         parts.append({"id": accessory["id"], "definition": accessory["dataPath"], "category": accessory["category"],
-                      "model": model, "paint": paint, "hookup": hookup, **transform})
+                      "model": model, "paint": paint, "textTexture": text_texture, "hookup": hookup, **transform})
         for diagnostic in model.get("diagnostics", []):
             message = f'{accessory["category"]}: {diagnostic}'
             if message not in issues:

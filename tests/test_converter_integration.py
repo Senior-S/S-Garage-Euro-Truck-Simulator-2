@@ -86,6 +86,54 @@ class ConverterIntegrationTests(unittest.TestCase):
         self.store._catalog = entries
         return entries
 
+    def test_material_warning_allows_exported_model_and_still_requires_geometry(self):
+        warning = ('<warning> [tobj] /automat/96/.tobj: Unable to mstat file!\n'
+                   '<warning> [tobj] /automat/96/.tobj: Unable to load!\n'
+                   '<warning> [material] /automat/96/960d89b4c0a3b477.mat: Error in material!\n'
+                   '[model] qashqai_cabin: pim:no pit:yes pis:no pic:no pip:no viewer:yes vertices:24 indices:12 materials:1')
+        (self.root / 'base.scs').touch()
+        self.store.tool_path = self.root / 'converter.exe'
+        self.store.tool_path.touch()
+        for exported in (True, False):
+            with self.subTest(exported=exported):
+                entry = self.model_entries('police' if exported else 'missing')[0]
+                model_path, _, _, _, export, parsed = self.store._model_paths(entry)
+                geometry = export / model_path.lstrip('/')
+                # A prior rejected export must also be recoverable.
+                incomplete = geometry.with_suffix('.export-incomplete')
+                incomplete.parent.mkdir(parents=True, exist_ok=True)
+                incomplete.touch()
+                with patch('backend.assets.subprocess.Popen') as popen:
+                    popen.return_value.returncode = 0
+                    popen.return_value.communicate.return_value = (warning, '')
+                    if exported:
+                        self.write_geometry(geometry)
+                        geometry.with_suffix('.pim').unlink()
+                        result = self.store.model(entry['path'])
+                        self.assertTrue(result['pieces'])
+                        self.assertTrue(parsed.is_file())
+                        self.assertFalse(incomplete.exists())
+                    else:
+                        with self.assertRaisesRegex(FileNotFoundError, 'did not export geometry'):
+                            self.store.model(entry['path'])
+                        self.assertFalse(parsed.exists())
+                        self.assertTrue(incomplete.exists())
+                    popen.assert_called_once()
+
+    def test_converter_errors_and_nonzero_exit_still_fail(self):
+        (self.root / 'base.scs').touch()
+        self.store.tool_path = self.root / 'converter.exe'
+        self.store.tool_path.touch()
+        for code, message in ((1, ''), (0, '<error> [model] broken'),
+                              (0, 'ERROR: broken'), (0, '  FATAL broken')):
+            for stderr in (False, True):
+                with self.subTest(code=code, message=message, stderr=stderr):
+                    with patch('backend.assets.subprocess.Popen') as popen:
+                        popen.return_value.returncode = code
+                        popen.return_value.communicate.return_value = ('', message) if stderr else (message, '')
+                        with self.assertRaisesRegex(RuntimeError, 'ConverterPIX failed'):
+                            self.store._run(['-m', '/vehicle/broken'])
+
     def test_bundled_catalog_matches_loose_truck_trailer_wheels_and_hookups(self):
         records = {
             "/def/vehicle/truck/test/chassis/base.sii": 'accessory_chassis_data : chassis.test {\nname: "Truck frame"\nmodel: "/truck.pmd"\nprice: 150\n}',

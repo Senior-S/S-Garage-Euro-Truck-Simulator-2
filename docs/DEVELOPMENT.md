@@ -8,6 +8,14 @@ For portable Windows downloads, see [Installation](INSTALLATION.md). These notes
 
 ## Open the source app
 
+To inventory special features from an imported catalog without extracting game assets again:
+
+```powershell
+python scripts/inventory-accessory-features.py "<cache>/catalog/<fingerprint>/catalog.json" build/special-accessories.html
+```
+
+The standalone HTML lists every matching definition with search and feature filters. It uses the same `accessory_options` classification as the catalog and save editor. Standard plate model paths identify custom text; category names alone do not, because plate categories also contain fixed-art lightboxes. Additional mod-specific text models need evidence before adding them to this detection. The `options` edit operation validates text and independent colors, preserves shared units through copy-on-write, and participates in existing history and backup handling.
+
 Double-click **Start Garage.cmd** in this folder. It starts the Python server in the background and opens `http://127.0.0.1:8765`. **Stop Garage.cmd** stops that server. Closing the browser keeps the server and editing session available until you stop it. Save your changes before stopping the server. Browser windows share one editing session; stale windows must reload before editing.
 
 Requirements for a source checkout are Windows x64, Python 3.10 or newer, and Node.js 20 or newer for the first UI build. The launcher installs Pillow, builds the UI if necessary, and downloads pinned ConverterPIX-SGarage and SII Decrypt binaries if missing. SHA-256 checks verify existing and newly installed tools. Once the UI, fonts, and tools are installed, the app runs locally without fetching web assets.
@@ -60,7 +68,7 @@ Saved mod dependencies select the local mod archives and Steam Workshop packages
 
 ## Current limits
 
-- Paint masks and accessory overrides, low/high light masks, and preview marker visibility are supported. Some specialized shaders, animated accessories, dynamic text plates, and other game-specific behavior need more rendering work. Geometry, materials, and attachment placement should be compared with ETS2 on representative trucks.
+- Paint masks and accessory overrides, low/high light masks, and preview marker visibility are supported. Standard driver/co-driver plates render instance text from the installed game's UI layout and MSDF font atlas, retaining the model UVs. Font outline/bevel effects are not reproduced by the CPU text renderer. Some specialized shaders, animated accessories, and other game-specific behavior need more rendering work. Geometry, materials, and attachment placement should be compared with ETS2 on representative trucks.
 - A mixed-brand part may have no matching locator on its host. S Garage reports it and preserves its save instance. It cannot guarantee that all combinations are accepted or rendered identically by the game.
 - Workshop packages with several version-specific alternatives require package-selection support. Locked or unsupported model formats report errors.
 - Save selection initially uses the save directory's name. Steam Cloud synchronization remains Steam's responsibility.

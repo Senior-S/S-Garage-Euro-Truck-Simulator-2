@@ -23,7 +23,8 @@ export function disposeObject(object) {
   object.removeFromParent()
 }
 
-function buildMaterial(source, textureCache, onFailure, lightMode, onRender, paint) {
+function buildMaterial(source, textureCache, onFailure, lightMode, onRender, paint, textTexture) {
+  if (source.driverPlate && textTexture) source = { ...source, texture: textTexture }
   if (source.paintable && paint) {
     const effect = (source.effect || '').split('.')
     const tintOnly = effect.includes('paint') && !effect.includes('truckpaint')
@@ -38,7 +39,19 @@ function buildMaterial(source, textureCache, onFailure, lightMode, onRender, pai
   for (const path of new Set([source.texture, source.paintTexture, source.lightMask, source.lightAlpha].filter(Boolean))) {
     let record = textureCache.get(path)
     if (!record) {
-      const texture = new THREE.TextureLoader().load(path, onRender, undefined, () => { onFailure?.(`Unable to load truck texture: ${path}`); onRender?.() })
+      const texture = new THREE.TextureLoader().load(path, onRender, undefined, () => {
+        // Recover a transient image request without replacing the shared texture.
+        setTimeout(() => {
+          if (textureCache.get(path) !== record) return
+          new THREE.ImageLoader().load(path, image => {
+            if (textureCache.get(path) !== record) return
+            texture.image = image; texture.needsUpdate = true; onRender?.()
+          }, undefined, () => {
+            if (textureCache.get(path) !== record) return
+            onFailure?.(`Unable to load truck texture after retry: ${path}`); onRender?.()
+          })
+        }, 250)
+      })
       texture.flipY = false; texture.wrapS = texture.wrapT = THREE.RepeatWrapping; texture.colorSpace = THREE.SRGBColorSpace
       record = { texture, users: 0 }; textureCache.set(path, record)
     }
@@ -61,7 +74,7 @@ export function updateTruckGroup(group, pointsGroup, data, onFailure, lightMode,
     let instance = instances.get(key)
     if (instance && instance.userData.modelKey !== part.modelKey) { disposeObject(instance); instances.delete(key); instance = null }
     if (!instance) {
-      instance = new THREE.Group(); instance.userData.modelKey = part.modelKey; instance.userData.paintKey = JSON.stringify(part.paint)
+      instance = new THREE.Group(); instance.userData.modelKey = part.modelKey; instance.userData.paintKey = JSON.stringify([part.paint, part.textTexture])
       for (const [pieceIndex, piece] of (part.model.pieces || []).entries()) {
         const geometryKey = JSON.stringify([part.modelKey, pieceIndex])
         let record = part.modelKey && geometryCache.get(geometryKey)
@@ -79,18 +92,18 @@ export function updateTruckGroup(group, pointsGroup, data, onFailure, lightMode,
         }
         record.users++
         const source = { ...piece.material, lampAuxiliary: (part.model.locators || []).some(locator => /flare\.vehicle\.aux_light/.test(locator.hookup || '')) }
-        const material = buildMaterial(source, textureCache, onFailure, lightMode, onRender, part.paint)
+        const material = buildMaterial(source, textureCache, onFailure, lightMode, onRender, part.paint, part.textTexture)
         const mesh = new THREE.Mesh(record.geometry, material); mesh.userData.vehicleId = part.vehicleId; mesh.userData.section = part.section; mesh.userData.accessoryId = part.id; mesh.userData.category = part.category; instance.add(mesh)
       }
       if (part.model.headLights) addHeadLights(instance, part.model.headLights, lightMode, onRender, onFailure)
       instances.set(key, instance); group.add(instance)
     }
-    const paintKey = JSON.stringify(part.paint)
+    const paintKey = JSON.stringify([part.paint, part.textTexture])
     if (instance.userData.paintKey !== paintKey) {
       part.model.pieces.forEach((piece, index) => {
-        if (!piece.material?.paintable) return
+        if (!piece.material?.paintable && !piece.material?.driverPlate) return
         const mesh = instance.children[index], old = mesh.material
-        mesh.material = buildMaterial(piece.material, textureCache, onFailure, lightMode, onRender, part.paint)
+        mesh.material = buildMaterial(piece.material, textureCache, onFailure, lightMode, onRender, part.paint, part.textTexture)
         // Acquire replacement textures before releasing the old references.
         for (const [cache, path] of old.userData.textureRecords) {
           const record = cache.get(path)

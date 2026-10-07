@@ -112,6 +112,34 @@ def _float_text(text: str) -> list[float]:
     return _numbers(text)
 
 
+def accessory_options(entry: dict) -> dict:
+    """Describe confirmed instance controls separately from definition-only features."""
+    fields = entry.get("fields", {})
+    kind = entry.get("unitType", "")
+    models = {entry.get("model"), fields.get("exterior_model"), fields.get("interior_model")}
+    # Category alone is insufficient: drv_plate also contains fixed-art lightboxes.
+    text = bool(models & {f"/vehicle/truck/upgrade/{side}/{name}.pmd"
+                          for side in ("driver_plate", "codriver_plate") for name in ("0", "0_int")})
+    color = kind == "accessory_addon_painted_data" or kind == "accessory_rim_data" and fields.get("paintable") == "true"
+    features = []
+    for enabled, label in (
+        (text, "Custom text"), (color, "Accessory color"),
+        (kind == "accessory_paint_job_data", "Paint job colors / mask"),
+        (kind in ("accessory_addon_int_data", "accessory_hookup_int_data") and fields.get("data[]"), "Physics toy"),
+        (kind == "accessory_addon_patch_data", "Cloth / flexible part"),
+        (fields.get("ui_path"), "Live display"),
+        ("horn" in kind, "Horn sound"),
+        (kind == "accessory_addon_tank_data", "Fuel capacity"),
+        (kind == "accessory_addon_trailer_cables_data", "Trailer cables"),
+        (kind == "accessory_head_lights_data" or fields.get("electric_type"), "Lighting / electrics"),
+        (fields.get("animated_model") or fields.get("wiper_model") or fields.get("windows_model") or fields.get("trailer_brace_anim"), "Animation"),
+        (fields.get("look") or fields.get("variant"), "Defined look / variant"),
+    ):
+        if enabled:
+            features.append(label)
+    return {"text": text, "paintColor": color, "defaultColor": fields.get("default_color", "(1, 1, 1)"), "features": features}
+
+
 def _find_steam_roots() -> list[Path]:
     roots: list[Path] = []
     if winreg is None:
@@ -417,7 +445,8 @@ class AssetStore:
             except subprocess.TimeoutExpired:
                 continue
         output = (stdout + "\n" + stderr).strip()
-        if not partial_batch and (process.returncode or re.search(r"(?:^|\s)(?:ERROR|FATAL)(?:\s|:)|<error>\s*\d*", output, re.I)):
+        # Match diagnostic severity, not words inside a warning's message.
+        if not partial_batch and (process.returncode or re.search(r"^\s*(?:(?:ERROR|FATAL)(?:\s|:|$)|<error>)", output, re.I | re.M)):
             raise RuntimeError(f"ConverterPIX failed ({process.returncode}): {output[-3000:]}")
         return output
 
@@ -647,6 +676,42 @@ class AssetStore:
             except (RuntimeError, FileNotFoundError) as error:
                 diagnostics.append(f"{mode}: projection mask unavailable; using an approximate beam. {error}")
         return {"fields": fields, "masks": masks, "diagnostics": diagnostics}
+
+    def driver_plate_texture(self, text: str, cancelled=None) -> str:
+        """Cache instance lettering independently of the shared plate geometry."""
+        if __package__:
+            from .plate_text import render_driver_plate
+        else:
+            from plate_text import render_driver_plate
+        with self.lock:
+            if cancelled and cancelled():
+                raise CancelledError()
+            revision = self._parser_fingerprint + hashlib.sha256(Path(__file__).with_name("plate_text.py").read_bytes()).hexdigest()
+            root = self.cache_path / "plate-text" / self._fingerprint()
+            target = root / (hashlib.sha256((revision + text).encode()).hexdigest() + ".png")
+            if not target.is_file():
+                def read_text(path):
+                    return self._definition_text(root / path.lstrip("/"), root, cancelled)
+
+                def load_texture(path):
+                    file = (root / path.lstrip("/")).with_suffix(".dds").resolve()
+                    if not file.is_relative_to(root.resolve()):
+                        raise ValueError("Plate texture is outside the asset cache")
+                    if not file.is_file():
+                        file.parent.mkdir(parents=True, exist_ok=True)
+                        self._run(["-e", str(root), "-t", path], cancelled=cancelled)
+                    with Image.open(file) as image:
+                        return image.copy()
+
+                rendered = render_driver_plate(text, read_text, load_texture)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                temporary = target.with_suffix(".tmp")
+                # UI coordinates point up; garage texture uploads use flipY=false.
+                rendered.transpose(Image.Transpose.FLIP_TOP_BOTTOM).save(temporary, format="PNG")
+                temporary.replace(target)
+            relative = target.relative_to(self.cache_path).as_posix()
+            self.texture_files[relative] = target.resolve()
+            return "/cache/" + relative
 
     def paint_job(self, path: str, cancelled=None, textures=True, *, include_overrides=True, accessory_key=None, accessory_keys=None, _entry=None, _fingerprint=None) -> dict:
         """Import paint masks once, including the game's accessory overrides."""
@@ -1112,6 +1177,7 @@ def _parse_model(pim_path: Path, pit_path: Path | None, export: Path, selected_l
                 "name": alias,
                 "color": diffuse[:3],
                 "texture": texture_url,
+                "driverPlate": any(value.removesuffix(".tobj") == "/vehicle/truck/share/driver_plate" for value in material_data["textures"].values()),
                 "effect": effect,
                 "lightMask": _texture_url(mask_textures, export, ignore_alpha=True) if "lamp" in effect_tokens else None,
                 "lightAlpha": _texture_url(mask_textures, export, alpha_only=True) if "lamp" in effect_tokens else None,

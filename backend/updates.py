@@ -16,20 +16,30 @@ VERSION = (Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1])) /
 def check_updates() -> dict:
     """Try once plus three retries, with a five-second timeout per request."""
     result = {"currentVersion": VERSION, "status": "unavailable", "url": RELEASES_URL}
-    request = Request(f"https://api.github.com/repos/{REPOSITORY}/releases/latest", headers={
+    # Public preview builds are marked prerelease and excluded by /releases/latest.
+    request = Request(f"https://api.github.com/repos/{REPOSITORY}/releases?per_page=100", headers={
         "Accept": "application/vnd.github+json", "User-Agent": f"S-Garage/{VERSION}",
         "X-GitHub-Api-Version": "2022-11-28"})
     for attempt in range(4):
         try:
             with urlopen(request, timeout=5) as response:
-                release = json.load(response)
-            tag = release["tag_name"]
-            latest = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", tag)
+                releases = json.load(response)
             current = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", VERSION)
-            if not latest or not current or release.get("draft") or release.get("prerelease"):
-                raise ValueError("Not a stable release version")
-            newer = tuple(map(int, latest.groups())) > tuple(map(int, current.groups()))
-            return {**result, "status": "available" if newer else "current", "latestVersion": tag.lstrip("v")}
+            if not isinstance(releases, list) or not current:
+                raise ValueError("Invalid release list or current version")
+            versions = []
+            for release in releases:
+                if not isinstance(release, dict) or release.get("draft"):
+                    continue
+                tag = release.get("tag_name")
+                version = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", tag) if isinstance(tag, str) else None
+                if version:
+                    versions.append(tuple(map(int, version.groups())))
+            if not versions:
+                raise ValueError("No supported release versions")
+            latest = max(versions)
+            newer = latest > tuple(map(int, current.groups()))
+            return {**result, "status": "available" if newer else "current", "latestVersion": ".".join(map(str, latest))}
         except (URLError, OSError, ValueError, KeyError, TypeError):
             if attempt < 3:
                 time.sleep(.5 * 2 ** attempt)
